@@ -105,6 +105,9 @@ export function MyAgentsApp() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
+  const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [pageError, setPageError] = useState<string | null>(null);
   const [syncErrors, setSyncErrors] = useState<
     Partial<Record<AgentId, string>>
@@ -183,6 +186,15 @@ export function MyAgentsApp() {
     setSessions((current) =>
       current.map((session) => (session.id === id ? update(session) : session)),
     );
+  }
+
+  function toggleProject(projectId: string) {
+    setCollapsedProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   }
 
   async function refreshSession(id: string, showLoading = false) {
@@ -359,12 +371,12 @@ export function MyAgentsApp() {
         </div>
         <Separator />
         <ScrollArea className="min-h-0 flex-1">
-          <div className="px-3 py-3">
+          <div className="overflow-x-hidden px-3 py-3">
             <p className="mb-2 px-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Sessions</p>
             {loading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading" /> : sessions.length === 0 ? (
               <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">No sessions yet. Start one with any installed ACP agent.</p>
-            ) : <div className="space-y-3">{projectGroups.map((project) => <section key={project.id}><div className="mb-1 flex items-center gap-1.5 px-2 text-[11px] font-medium text-foreground"><FolderGit2 className="size-3.5 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span><span className="text-[10px] font-normal text-muted-foreground">{project.sessions.length}</span></div><div className="space-y-0.5">{project.sessions.map((session) => (
-              <button key={session.id} onClick={() => setSelectedId(session.id)} className={cn("flex w-[248px] max-w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors", selectedId === session.id ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
+            ) : <div className="w-[248px] max-w-full space-y-1">{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center"><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span><span className="text-[10px] font-normal text-muted-foreground">{project.sessions.length}</span></button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
+              <button key={session.id} onClick={() => setSelectedId(session.id)} className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors", selectedId === session.id ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{session.title}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <AgentBadge session={session} />
@@ -382,7 +394,7 @@ export function MyAgentsApp() {
                   )}
                 </span>
               </button>
-            ))}</div></section>)}</div>}
+            ))}</div>}</section>; })}</div>}
           </div>
         </ScrollArea>
         <div className="border-t p-3"><div className="flex items-center gap-2 rounded-lg px-2 py-2"><Avatar className="size-7 rounded-md"><AvatarFallback className="rounded-md bg-muted"><Code2 /></AvatarFallback></Avatar><div className="min-w-0 flex-1"><p className="text-xs font-medium">Local agents</p><p className="truncate text-[10px] text-muted-foreground">{agents.filter(({ enabled }) => enabled).length} ACP agents</p></div><ThemeToggle /><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
