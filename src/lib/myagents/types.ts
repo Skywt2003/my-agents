@@ -1,10 +1,83 @@
 export type SessionStatus = "connecting" | "ready" | "running" | "error";
 export type SessionSource = "myagents" | "agent";
-export type AgentId = "codex" | "opencode";
+export type AgentId = string;
+export type AgentSource = "bundled" | "system" | "registry" | "custom";
+
+export type AgentCapabilities = {
+  loadSession: boolean;
+  listSessions: boolean;
+  resumeSession: boolean;
+  closeSession: boolean;
+  promptImage: boolean;
+  promptAudio: boolean;
+  promptEmbeddedContext: boolean;
+};
+
+export type AgentAuthMethod = {
+  id: string;
+  name: string;
+  description?: string;
+  type: "agent" | "env_var" | "terminal" | "unknown";
+};
 
 export type AgentDescriptor = {
   id: AgentId;
+  registryId?: string;
   name: string;
+  version?: string;
+  description?: string;
+  command: string;
+  args: string[];
+  source: AgentSource;
+  enabled: boolean;
+  available: boolean;
+  capabilities?: AgentCapabilities;
+  authMethods: AgentAuthMethod[];
+  error?: string;
+};
+
+export type AgentInput = {
+  id?: string;
+  registryId?: string;
+  name: string;
+  version?: string;
+  description?: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  source: AgentSource;
+  enabled?: boolean;
+};
+
+export type RegistryPackageDistribution = {
+  package: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+export type RegistryBinaryTarget = {
+  archive: string;
+  sha256?: string;
+  cmd: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+export type RegistryAgent = {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  repository?: string;
+  website?: string;
+  authors?: string[];
+  license?: string;
+  icon?: string;
+  distribution: {
+    binary?: Partial<Record<string, RegistryBinaryTarget>>;
+    npx?: RegistryPackageDistribution;
+    uvx?: RegistryPackageDistribution;
+  };
 };
 
 export type SessionProject = {
@@ -50,6 +123,7 @@ export type SessionSummary = {
   cwd: string;
   source: SessionSource;
   status: SessionStatus;
+  resumable: boolean;
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];

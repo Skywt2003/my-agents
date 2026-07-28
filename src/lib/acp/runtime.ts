@@ -1,17 +1,16 @@
 import "server-only";
 
 import {
-  execFile,
   spawn,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { Readable, Writable } from "node:stream";
-import { promisify } from "node:util";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
+  AuthMethod,
   ClientConnection,
   InitializeResponse,
   PermissionOption as AcpPermissionOption,
@@ -22,7 +21,8 @@ import type {
 } from "@agentclientprotocol/sdk";
 
 import type {
-  AgentDescriptor,
+  AgentAuthMethod,
+  AgentCapabilities,
   AgentId,
   ChatMessage,
   PermissionRequest,
@@ -32,6 +32,10 @@ import type {
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
+import {
+  listInstalledAgents,
+  requireInstalledAgent,
+} from "@/lib/acp/agents";
 import { projectFromWorkingDirectory } from "@/lib/myagents/project";
 import {
   getPersistedSession,
@@ -41,6 +45,9 @@ import {
   persistMessage,
   persistSession,
   replaceSessionContent,
+  updateAgentError,
+  updateAgentHandshake,
+  type InstalledAgent,
 } from "@/lib/persistence/database";
 
 type Listener = (event: SessionStreamEvent) => void;
@@ -67,17 +74,21 @@ type SessionRuntime = {
   listeners: Set<Listener>;
   process: ChildProcessWithoutNullStreams;
   connection: ClientConnection;
+  capabilities: AgentCapabilities;
   hydrating: boolean;
   error?: string;
 };
 
 type OpenAgent = {
+  agent: InstalledAgent;
   process: ChildProcessWithoutNullStreams;
   connection: ClientConnection;
   initialize: InitializeResponse;
+  capabilities: AgentCapabilities;
 };
 
 type RuntimeStore = {
+  version: 2;
   sessions: Map<string, SessionRuntime>;
   activations: Map<string, Promise<SessionRuntime>>;
   sync: Promise<Partial<Record<AgentId, string>>> | null;
@@ -87,43 +98,22 @@ declare global {
   var __myAgentsRuntimeStore: RuntimeStore | undefined;
 }
 
+const previousStore = globalThis.__myAgentsRuntimeStore;
+if (previousStore && previousStore.version !== 2) {
+  for (const session of previousStore.sessions.values()) {
+    session.connection.close();
+    session.process.kill();
+  }
+}
 const store =
-  globalThis.__myAgentsRuntimeStore ??
-  (globalThis.__myAgentsRuntimeStore = {
-    sessions: new Map(),
-    activations: new Map(),
-    sync: null,
-  });
-
-const agents: AgentDescriptor[] = [
-  { id: "codex", name: "Codex" },
-  { id: "opencode", name: "OpenCode" },
-];
-const execFileAsync = promisify(execFile);
-
-function agentDescriptor(agentId: AgentId) {
-  const agent = agents.find(({ id }) => id === agentId);
-  if (!agent) throw new Error(`Unknown ACP agent: ${agentId}`);
-  return agent;
-}
-
-function codexAdapterPath() {
-  return (
-    process.env.MYAGENTS_ACP_PATH ??
-    join(
-      process.cwd(),
-      "node_modules",
-      "@agentclientprotocol",
-      "codex-acp",
-      "dist",
-      "index.js",
-    )
-  );
-}
-
-function openCodePath() {
-  return process.env.MYAGENTS_OPENCODE_PATH ?? "opencode";
-}
+  previousStore?.version === 2
+    ? previousStore
+    : (globalThis.__myAgentsRuntimeStore = {
+        version: 2,
+        sessions: new Map(),
+        activations: new Map(),
+        sync: null,
+      });
 
 function serialize(runtime: SessionRuntime): SessionSummary {
   return {
@@ -136,6 +126,8 @@ function serialize(runtime: SessionRuntime): SessionSummary {
     cwd: runtime.cwd,
     source: runtime.source,
     status: runtime.status,
+    resumable:
+      runtime.capabilities.loadSession || runtime.capabilities.resumeSession,
     createdAt: runtime.createdAt,
     updatedAt: runtime.updatedAt,
     messages: runtime.messages,
@@ -293,28 +285,60 @@ function processError(error: unknown) {
     : "The ACP agent failed unexpectedly.";
 }
 
+function capabilitiesFromInitialize(
+  initialize: InitializeResponse,
+): AgentCapabilities {
+  const capabilities = initialize.agentCapabilities;
+  return {
+    loadSession: Boolean(capabilities?.loadSession),
+    listSessions: Boolean(capabilities?.sessionCapabilities?.list),
+    resumeSession: Boolean(capabilities?.sessionCapabilities?.resume),
+    closeSession: Boolean(capabilities?.sessionCapabilities?.close),
+    promptImage: Boolean(capabilities?.promptCapabilities?.image),
+    promptAudio: Boolean(capabilities?.promptCapabilities?.audio),
+    promptEmbeddedContext: Boolean(
+      capabilities?.promptCapabilities?.embeddedContext,
+    ),
+  };
+}
+
+function authMethodDescriptor(method: AuthMethod): AgentAuthMethod {
+  const type = "type" in method ? method.type : "agent";
+  return {
+    id: method.id,
+    name: method.name,
+    description: method.description ?? undefined,
+    type:
+      type === "agent" || type === "env_var" || type === "terminal"
+        ? type
+        : "unknown",
+  };
+}
+
+function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 20_000) {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out.`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function openAgent(
-  agentId: AgentId,
+  agent: InstalledAgent,
   cwd: string,
   runtime: () => SessionRuntime | undefined,
   label: string,
 ): Promise<OpenAgent> {
-  const command =
-    agentId === "codex"
-      ? process.execPath
-      : openCodePath();
-  const args =
-    agentId === "codex" ? [codexAdapterPath()] : ["acp", "--cwd", cwd];
-  const child = spawn(command, args, {
+  const child = spawn(agent.command, agent.args, {
     cwd,
     env: {
       ...process.env,
-      NO_BROWSER: process.env.NO_BROWSER ?? "1",
-      ...(agentId === "codex" && process.env.MYAGENTS_CODEX_PATH
-        ? { CODEX_PATH: process.env.MYAGENTS_CODEX_PATH }
-        : {}),
+      ...agent.env,
     },
     stdio: ["pipe", "pipe", "pipe"],
+  });
+  const spawnError = new Promise<never>((_, reject) => {
+    child.once("error", reject);
   });
 
   const app = acp
@@ -341,21 +365,36 @@ async function openAgent(
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
     if (process.env.NODE_ENV !== "production") {
-      console.error(`[${agentId}-acp:${label}] ${chunk.trim()}`);
+      console.error(`[${agent.id}-acp:${label}] ${chunk.trim()}`);
     }
   });
 
   try {
-    const initialize = await connection.agent.request(
-      acp.methods.agent.initialize,
-      {
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {},
-        clientInfo: { name: "MyAgents", version: "0.1.0" },
-      },
+    const initialize = await withTimeout(
+      Promise.race([
+        connection.agent.request(acp.methods.agent.initialize, {
+          protocolVersion: acp.PROTOCOL_VERSION,
+          clientCapabilities: {},
+          clientInfo: { name: "MyAgents", version: "0.1.0" },
+        }),
+        spawnError,
+      ]),
+      `${agent.name} ACP initialization`,
     );
-    return { process: child, connection, initialize };
+    if (initialize.protocolVersion !== acp.PROTOCOL_VERSION) {
+      throw new Error(
+        `${agent.name} negotiated unsupported ACP protocol version ${initialize.protocolVersion}.`,
+      );
+    }
+    const capabilities = capabilitiesFromInitialize(initialize);
+    updateAgentHandshake(
+      agent.id,
+      capabilities,
+      (initialize.authMethods ?? []).map(authMethodDescriptor),
+    );
+    return { agent, process: child, connection, initialize, capabilities };
   } catch (error) {
+    updateAgentError(agent.id, processError(error));
     connection.close(error);
     child.kill();
     throw error;
@@ -387,16 +426,20 @@ export async function createSession(
   agentId: AgentId = "codex",
 ): Promise<SessionSummary> {
   await validateWorkingDirectory(cwd);
-  const agent = agentDescriptor(agentId);
+  const agent = requireInstalledAgent(agentId);
   const id = randomUUID();
   const now = new Date().toISOString();
   let runtime: SessionRuntime | undefined;
-  const opened = await openAgent(agentId, cwd, () => runtime, id);
+  const opened = await openAgent(agent, cwd, () => runtime, id);
 
   try {
-    const response = await opened.connection.agent.request(
-      acp.methods.agent.session.new,
-      { cwd, mcpServers: [] },
+    const response = await withTimeout(
+      opened.connection.agent.request(acp.methods.agent.session.new, {
+        cwd,
+        mcpServers: [],
+      }),
+      `${agent.name} session creation`,
+      60_000,
     );
     runtime = {
       id,
@@ -415,6 +458,7 @@ export async function createSession(
       listeners: new Set(),
       process: opened.process,
       connection: opened.connection,
+      capabilities: opened.capabilities,
       hydrating: false,
     };
     store.sessions.set(id, runtime);
@@ -422,9 +466,62 @@ export async function createSession(
     watchConnection(runtime);
     return serialize(runtime);
   } catch (error) {
+    const message = processError(error);
+    updateAgentError(agent.id, message);
     opened.connection.close(error);
     opened.process.kill();
-    throw new Error(processError(error));
+    const authMethods = (opened.initialize.authMethods ?? [])
+      .map(({ name }) => name)
+      .join(", ");
+    throw new Error(
+      /auth/i.test(message) && authMethods
+        ? `${message}. Available authentication: ${authMethods}.`
+        : message,
+    );
+  }
+}
+
+export async function authenticateAgent(
+  agentId: AgentId,
+  methodId: string,
+  cwd = process.cwd(),
+) {
+  await validateWorkingDirectory(cwd);
+  const agent = requireInstalledAgent(agentId);
+  const opened = await openAgent(
+    agent,
+    cwd,
+    () => undefined,
+    "authenticate",
+  );
+  try {
+    const method = (opened.initialize.authMethods ?? []).find(
+      ({ id }) => id === methodId,
+    );
+    if (!method) throw new Error("The agent did not advertise this auth method.");
+    const type = "type" in method ? method.type : "agent";
+    if (type === "terminal") {
+      throw new Error(
+        `${agent.name} requires an interactive terminal authentication flow, which MyAgents does not expose yet.`,
+      );
+    }
+    if (type === "env_var") {
+      throw new Error(
+        `${agent.name} requires credentials in its configured environment variables.`,
+      );
+    }
+    await withTimeout(
+      opened.connection.agent.request(acp.methods.agent.authenticate, {
+        methodId,
+      }),
+      `${agent.name} authentication`,
+      5 * 60_000,
+    );
+    updateAgentError(agent.id);
+    return { ok: true };
+  } finally {
+    opened.connection.close();
+    opened.process.kill();
   }
 }
 
@@ -439,19 +536,23 @@ async function activatePersistedSession(id: string) {
     const saved = getPersistedSession(id);
     if (!saved) throw new Error("Session not found.");
     await validateWorkingDirectory(saved.cwd);
+    const agent = requireInstalledAgent(saved.agentId);
 
     const holder: { runtime?: SessionRuntime } = {};
     const opened = await openAgent(
-      saved.agentId,
+      agent,
       saved.cwd,
       () => holder.runtime,
       id,
     );
-    if (!opened.initialize.agentCapabilities?.loadSession) {
+    if (!opened.capabilities.loadSession && !opened.capabilities.resumeSession) {
       opened.connection.close();
       opened.process.kill();
-      throw new Error("This agent does not support loading existing sessions.");
+      throw new Error(
+        `${agent.name} does not advertise session/load or session/resume; this saved session cannot be continued after its ACP process exits.`,
+      );
     }
+    const loadsHistory = opened.capabilities.loadSession;
 
     const runtime: SessionRuntime = {
       id: saved.id,
@@ -464,31 +565,46 @@ async function activatePersistedSession(id: string) {
       status: "connecting",
       createdAt: saved.createdAt,
       updatedAt: saved.updatedAt,
-      messages: [],
-      activities: new Map(),
+      messages: loadsHistory ? [] : [...saved.messages],
+      activities: new Map(
+        loadsHistory
+          ? []
+          : saved.activities.map((activity) => [activity.id, activity]),
+      ),
       permissions: new Map(),
       listeners: new Set(),
       process: opened.process,
       connection: opened.connection,
-      hydrating: true,
+      capabilities: opened.capabilities,
+      hydrating: loadsHistory,
     };
     holder.runtime = runtime;
     store.sessions.set(id, runtime);
 
     try {
-      await opened.connection.agent.request(acp.methods.agent.session.load, {
-        sessionId: saved.acpSessionId,
-        cwd: saved.cwd,
-        mcpServers: [],
-      });
+      if (loadsHistory) {
+        await opened.connection.agent.request(acp.methods.agent.session.load, {
+          sessionId: saved.acpSessionId,
+          cwd: saved.cwd,
+          mcpServers: [],
+        });
+      } else {
+        await opened.connection.agent.request(acp.methods.agent.session.resume, {
+          sessionId: saved.acpSessionId,
+          cwd: saved.cwd,
+          mcpServers: [],
+        });
+      }
       runtime.hydrating = false;
       runtime.status = "ready";
       runtime.error = undefined;
-      replaceSessionContent(
-        runtime.id,
-        runtime.messages,
-        Array.from(runtime.activities.values()),
-      );
+      if (loadsHistory) {
+        replaceSessionContent(
+          runtime.id,
+          runtime.messages,
+          Array.from(runtime.activities.values()),
+        );
+      }
       persistRuntime(runtime);
       watchConnection(runtime);
       return runtime;
@@ -519,125 +635,55 @@ function persistAgentSession(agentId: AgentId, session: SessionInfo) {
   });
 }
 
-async function syncAgentSessionsFor(agentId: AgentId) {
+async function syncAgentSessionsFor(agent: InstalledAgent) {
   const opened = await openAgent(
-    agentId,
+    agent,
     process.cwd(),
     () => undefined,
     "session-list",
   );
   try {
-    if (!opened.initialize.agentCapabilities?.sessionCapabilities?.list) {
-      throw new Error(`${agentDescriptor(agentId).name} does not support listing sessions.`);
-    }
+    if (!opened.capabilities.listSessions) return;
 
-    try {
-      let cursor: string | null | undefined;
-      do {
-        const response = await opened.connection.agent.request(
-          acp.methods.agent.session.list,
-          { cwd: process.cwd(), ...(cursor ? { cursor } : {}) },
-        );
-        response.sessions.forEach((session) => persistAgentSession(agentId, session));
-        cursor = response.nextCursor;
-      } while (cursor);
-    } catch (error) {
-      if (agentId !== "opencode") throw error;
-      await syncOpenCodeSessionsFromCli(process.cwd());
-      throw new Error(
-        `${processError(error)} Sessions were imported through the OpenCode CLI fallback.`,
+    let cursor: string | null | undefined;
+    do {
+      const response = await opened.connection.agent.request(
+        acp.methods.agent.session.list,
+        { cwd: process.cwd(), ...(cursor ? { cursor } : {}) },
       );
-    }
+      response.sessions.forEach((session) =>
+        persistAgentSession(agent.id, session),
+      );
+      cursor = response.nextCursor;
+    } while (cursor);
   } finally {
     opened.connection.close();
     opened.process.kill();
   }
 }
 
-type OpenCodeCliSession = {
-  id: string;
-  title: string;
-  directory: string;
-  updated: number;
-};
-
-async function syncOpenCodeSessionsFromCli(cwd: string) {
-  const { stdout } = await execFileAsync(
-    openCodePath(),
-    ["session", "list", "--format", "json", "-n", "100"],
-    {
-      cwd,
-      encoding: "utf8",
-      env: process.env,
-      maxBuffer: 4 * 1024 * 1024,
-    },
-  );
-  const sessions = JSON.parse(stdout || "[]") as OpenCodeCliSession[];
-  sessions.forEach((session) =>
-    persistDiscoveredSession({
-      agentId: "opencode",
-      acpSessionId: session.id,
-      title: session.title?.trim() || basename(session.directory) || "Untitled session",
-      cwd: session.directory,
-      updatedAt: new Date(session.updated).toISOString(),
-    }),
-  );
-}
-
-type OpenCodeExport = {
-  messages?: Array<{
-    info: {
-      id: string;
-      role: "user" | "assistant";
-      time?: { created?: number };
-    };
-    parts?: Array<{ type: string; text?: string }>;
-  }>;
-};
-
-async function importOpenCodeSessionHistory(session: SessionSummary) {
-  const { stdout } = await execFileAsync(
-    openCodePath(),
-    ["export", session.acpSessionId],
-    {
-      cwd: session.cwd,
-      encoding: "utf8",
-      env: process.env,
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
-  const jsonStart = stdout.indexOf("{");
-  if (jsonStart < 0) throw new Error("OpenCode did not return an export payload.");
-  const exported = JSON.parse(stdout.slice(jsonStart)) as OpenCodeExport;
-  const messages = (exported.messages ?? []).flatMap<ChatMessage>((message) => {
-    const content = (message.parts ?? [])
-      .filter((part) => part.type === "text" && part.text)
-      .map((part) => part.text)
-      .join("\n");
-    if (!content) return [];
-    return [{
-      id: message.info.id,
-      role: message.info.role,
-      content,
-      createdAt: new Date(message.info.time?.created ?? Date.now()).toISOString(),
-    }];
-  });
-  replaceSessionContent(session.id, messages, []);
-}
-
 export async function syncAgentSessions() {
   if (store.sync) return store.sync;
 
   store.sync = (async () => {
-    const results = await Promise.allSettled(
-      agents.map(({ id }) => syncAgentSessionsFor(id)),
+    const agents = listInstalledAgents().filter(
+      ({ enabled, available }) => enabled && available,
     );
-    return results.reduce<Partial<Record<AgentId, string>>>((errors, result, index) => {
-      if (result.status === "rejected") {
-        errors[agents[index].id] = processError(result.reason);
-      }
-      return errors;
-    }, {});
+    const results = await Promise.allSettled(
+      agents.map(({ id }) => syncAgentSessionsFor(requireInstalledAgent(id))),
+    );
+    return results.reduce<Partial<Record<AgentId, string>>>(
+      (errors, result, index) => {
+        if (result.status === "rejected") {
+          const id = agents[index].id;
+          const message = processError(result.reason);
+          errors[id] = message;
+          updateAgentError(id, message);
+        }
+        return errors;
+      },
+      {},
+    );
   })();
 
   try {
@@ -647,8 +693,9 @@ export async function syncAgentSessions() {
   }
 }
 
-export async function listSessions() {
-  const syncErrors = await syncAgentSessions();
+export async function listSessions(sync = false) {
+  const agents = listInstalledAgents();
+  const syncErrors = sync ? await syncAgentSessions() : {};
 
   const sessions = listPersistedSessions()
     .map((saved) => {
@@ -657,23 +704,23 @@ export async function listSessions() {
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
-  return { sessions, agents, syncErrors };
+  return {
+    sessions,
+    agents: sync ? listInstalledAgents() : agents,
+    syncErrors,
+  };
 }
 
 export async function getSession(id: string) {
   const saved = getPersistedSession(id);
   if (!saved) throw new Error("Session not found.");
-
   try {
     return serialize(await activatePersistedSession(id));
   } catch (error) {
-    if (saved.agentId !== "opencode") throw error;
-    await importOpenCodeSessionHistory(saved);
-    const imported = getPersistedSession(id)!;
     return {
-      ...imported,
+      ...saved,
       status: "error" as const,
-      error: `OpenCode ACP load is unavailable: ${processError(error)} History is shown through the OpenCode CLI fallback.`,
+      error: processError(error),
     };
   }
 }
@@ -768,10 +815,26 @@ export async function cancelSession(id: string) {
   });
 }
 
+export async function closeSession(id: string) {
+  const runtime = store.sessions.get(id);
+  if (!runtime) return;
+  store.sessions.delete(id);
+  try {
+    if (runtime.capabilities.closeSession) {
+      await runtime.connection.agent.request(acp.methods.agent.session.close, {
+        sessionId: runtime.acpSessionId,
+      });
+    }
+  } finally {
+    runtime.connection.close();
+    runtime.process.kill();
+  }
+}
+
 export function defaultWorkingDirectory() {
   return process.cwd();
 }
 
 export function listAgents() {
-  return agents;
+  return listInstalledAgents();
 }
