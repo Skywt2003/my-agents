@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { cjk } from "@streamdown/cjk";
 import {
   ArrowUp,
   Bot,
@@ -20,6 +21,7 @@ import {
   Trash2,
   Wrench,
 } from "lucide-react";
+import { Streamdown } from "streamdown";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -67,6 +69,8 @@ type ProjectGroup = {
   path: string;
   sessions: SessionSummary[];
 };
+
+const streamdownPlugins = { cjk };
 
 const getError = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
@@ -387,7 +391,7 @@ export function MyAgentsApp() {
       <section className="flex min-h-0 min-w-0 flex-col">
         {selected ? <>
           <header className="flex h-16 shrink-0 items-center justify-between border-b px-6"><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">{selected.title}</h1><AgentBadge session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selected.cwd}</p></div><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Session options"><MoreHorizontal /></Button></TooltipTrigger><TooltipContent>Session options are coming next</TooltipContent></Tooltip></header>
-          <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message) => <Message key={message.id} message={message} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
+          <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message, index) => <Message key={message.id} message={message} isStreaming={selected.status === "running" && message.role === "assistant" && index === selected.messages.length - 1} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
           <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error"} /><div className="flex items-center justify-end px-1 pb-1">{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={sendMessage} disabled={!draft.trim() || selected.status === "error"} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
         </> : <NoSession loading={loading} error={pageError} onCreate={() => setDialogOpen(true)} />}
       </section>
@@ -630,13 +634,24 @@ function EmptyConversation() {
   return <div className="flex min-h-[44vh] flex-col items-center justify-center text-center"><div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-muted"><Sparkles className="size-4 text-muted-foreground" /></div><h2 className="text-base font-semibold">What would you like to build?</h2><p className="mt-1.5 max-w-sm text-xs leading-5 text-muted-foreground">Ask the agent to inspect code, explain a problem, or make a change in this workspace.</p></div>;
 }
 
-function Message({ message }: { message: ChatMessage }) {
+function Message({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
   const user = message.role === "user";
   if (user) {
     return <article className="ml-auto max-w-[85%] rounded-xl bg-muted px-4 py-2.5"><p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{message.content}</p></article>;
   }
 
-  return <article><p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{message.content}</p></article>;
+  return (
+    <article>
+      <Streamdown
+        className="break-words text-[13px] leading-6 text-foreground/90"
+        isAnimating={isStreaming}
+        mode={isStreaming ? "streaming" : "static"}
+        plugins={streamdownPlugins}
+      >
+        {message.content}
+      </Streamdown>
+    </article>
+  );
 }
 
 function AgentBadge({ session }: { session: SessionSummary }) {
