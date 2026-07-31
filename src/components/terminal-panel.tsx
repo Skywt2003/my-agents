@@ -196,39 +196,37 @@ export function TerminalPanel({
         </div>
         <div className="ml-2 flex shrink-0 items-center gap-0.5">
           <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
+            <TooltipTrigger
+              render={<Button
                 variant="ghost"
                 size="icon-xs"
                 onClick={() => void createTab()}
                 disabled={creating}
                 aria-label="New terminal"
-              >
-                <Plus />
-              </Button>
+              />}
+            >
+              <Plus />
             </TooltipTrigger>
             <TooltipContent>New terminal</TooltipContent>
           </Tooltip>
           {session.activeId && (
             <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
+              <TooltipTrigger
+                render={<Button
                   variant="ghost"
                   size="icon-xs"
                   onClick={() => void closeTab(session.activeId!)}
                   aria-label="Kill active terminal"
-                >
-                  <Trash2 />
-                </Button>
+                />}
+              >
+                <Trash2 />
               </TooltipTrigger>
               <TooltipContent>Kill terminal</TooltipContent>
             </Tooltip>
           )}
           <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close terminal panel">
-                <X />
-              </Button>
+            <TooltipTrigger render={<Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close terminal panel" />}>
+              <X />
             </TooltipTrigger>
             <TooltipContent>Close panel</TooltipContent>
           </Tooltip>

@@ -490,8 +490,8 @@ export function MyAgentsApp() {
         </div>
         <div className="px-3 pb-4">
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="w-full justify-start gap-2 shadow-none" size="sm" variant="secondary"><Plus />New session</Button>
+            <DialogTrigger render={<Button className="w-full justify-start gap-2 shadow-none" size="sm" variant="secondary" />}>
+              <Plus />New session
             </DialogTrigger>
             <DialogContent className="sm:max-w-[480px]">
               <DialogHeader><DialogTitle>Start a new session</DialogTitle><DialogDescription>Choose a local ACP agent and its workspace.</DialogDescription></DialogHeader>
@@ -547,7 +547,7 @@ export function MyAgentsApp() {
 
       <section className="flex min-h-0 min-w-0 flex-col">
         {selected ? <>
-          <header className="flex h-16 shrink-0 items-center justify-between border-b px-6"><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">{selected.title}</h1><AgentBadge session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selected.cwd}</p></div><div className="flex items-center gap-1"><Tooltip><TooltipTrigger asChild><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></TooltipTrigger><TooltipContent>{terminalOpen ? "Close terminal" : "Open terminal"}</TooltipContent></Tooltip><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Session options"><MoreHorizontal /></Button></TooltipTrigger><TooltipContent>Session options are coming next</TooltipContent></Tooltip></div></header>
+          <header className="flex h-16 shrink-0 items-center justify-between border-b px-6"><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">{selected.title}</h1><AgentBadge session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selected.cwd}</p></div><div className="flex items-center gap-1"><Tooltip><TooltipTrigger render={<Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)} />}><SquareTerminal /></TooltipTrigger><TooltipContent>{terminalOpen ? "Close terminal" : "Open terminal"}</TooltipContent></Tooltip><Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Session options" />}><MoreHorizontal /></TooltipTrigger><TooltipContent>Session options are coming next</TooltipContent></Tooltip></div></header>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
               <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message, index) => <Message key={message.id} message={message} isStreaming={selected.status === "running" && message.role === "assistant" && index === selected.messages.length - 1} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
@@ -729,10 +729,8 @@ function AgentSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Manage ACP agents">
-          <Settings2 />
-        </Button>
+      <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Manage ACP agents" />}>
+        <Settings2 />
       </DialogTrigger>
       <DialogContent className="max-h-[88vh] overflow-hidden sm:max-w-[720px]">
         <DialogHeader>

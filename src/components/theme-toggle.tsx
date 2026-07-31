@@ -1,10 +1,17 @@
 "use client";
 
-import { Check, Monitor, Moon, Sun } from "lucide-react";
+import { useSyncExternalStore } from "react";
+import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-import { DropdownMenu } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 const themes = [
@@ -13,51 +20,53 @@ const themes = [
   { value: "system", label: "Follow system", icon: Monitor },
 ] as const;
 
+const subscribeToHydration = () => () => {};
+
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
+  const visibleTheme = hydrated ? theme : undefined;
   const CurrentIcon =
-    themes.find(({ value }) => value === theme)?.icon ?? Sun;
+    themes.find(({ value }) => value === visibleTheme)?.icon ?? Sun;
 
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Choose color theme"
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Choose color theme"
+          />
+        }
+      >
+        <CurrentIcon className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-36">
+        <DropdownMenuRadioGroup
+          value={visibleTheme ?? "light"}
+          onValueChange={setTheme}
         >
-          <CurrentIcon className="size-4" />
-        </Button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          sideOffset={4}
-          className="z-50 min-w-36 rounded-lg border bg-popover p-1 text-sm text-popover-foreground shadow-md outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
-        >
-          <DropdownMenu.RadioGroup
-            value={theme ?? "light"}
-            onValueChange={setTheme}
-          >
-            {themes.map(({ value, label, icon: Icon }) => (
-              <DropdownMenu.RadioItem
-                key={value}
-                value={value}
-                className={cn(
-                  "relative flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
-                  theme === value && "font-medium",
-                )}
-              >
-                <Icon className="size-4 text-muted-foreground" />
-                <span className="flex-1">{label}</span>
-                <DropdownMenu.ItemIndicator>
-                  <Check className="size-3.5" />
-                </DropdownMenu.ItemIndicator>
-              </DropdownMenu.RadioItem>
-            ))}
-          </DropdownMenu.RadioGroup>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          {themes.map(({ value, label, icon: Icon }) => (
+            <DropdownMenuRadioItem
+              key={value}
+              value={value}
+              closeOnClick
+              className={cn(
+                "gap-2",
+                visibleTheme === value && "font-medium",
+              )}
+            >
+              <Icon className="size-4 text-muted-foreground" />
+              <span className="flex-1">{label}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
