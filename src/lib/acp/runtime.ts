@@ -649,7 +649,7 @@ async function syncAgentSessionsFor(agent: InstalledAgent) {
     do {
       const response = await opened.connection.agent.request(
         acp.methods.agent.session.list,
-        { cwd: process.cwd(), ...(cursor ? { cursor } : {}) },
+        cursor ? { cursor } : {},
       );
       response.sessions.forEach((session) =>
         persistAgentSession(agent.id, session),
