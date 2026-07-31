@@ -142,3 +142,17 @@ export type SessionStreamEvent =
   | { type: "status"; status: SessionStatus }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
+
+export type TerminalStatus = "running" | "exited";
+
+export type TerminalInfo = {
+  id: string;
+  title: string;
+  cwd: string;
+  status: TerminalStatus;
+  exitCode?: number;
+};
+
+export type TerminalStreamEvent =
+  | { type: "output"; data: string }
+  | { type: "exit"; exitCode: number };

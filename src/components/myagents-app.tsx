@@ -14,14 +14,20 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Plus,
+  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
   Sparkles,
+  SquareTerminal,
   Trash2,
   Wrench,
 } from "lucide-react";
-import { Streamdown } from "streamdown";
+import {
+  Streamdown,
+  type LinkSafetyConfig,
+  type LinkSafetyModalProps,
+} from "streamdown";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -38,10 +44,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ResizeHandle } from "@/components/resize-handle";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { TerminalPanel } from "@/components/terminal-panel";
 import type {
   AgentDescriptor,
   AgentId,
@@ -70,7 +78,26 @@ type ProjectGroup = {
   sessions: SessionSummary[];
 };
 
+type UiPreferences = {
+  sidebarWidth: number;
+  terminalHeight: number;
+  collapsedProjectIds: string[];
+};
+
 const streamdownPlugins = { cjk };
+const streamdownLinkSafety = {
+  enabled: true,
+  renderModal: ExternalLinkSafetyModal,
+} satisfies LinkSafetyConfig;
+const UI_PREFERENCES_STORAGE_KEY = "myagents:ui-preferences:v1";
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_HORIZONTAL_PADDING = 24;
+const TERMINAL_MIN_HEIGHT = 180;
+const TERMINAL_MAX_HEIGHT = 720;
+
+const clamp = (value: number, minimum: number, maximum: number) =>
+  Math.min(maximum, Math.max(minimum, value));
 
 const getError = (error: unknown) =>
   error instanceof Error ? error.message : "Something went wrong.";
@@ -104,12 +131,17 @@ export function MyAgentsApp() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [hoveredProjectId, setHoveredProjectId] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(280);
+  const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [syncErrors, setSyncErrors] = useState<
     Partial<Record<AgentId, string>>
   >({});
@@ -134,6 +166,77 @@ export function MyAgentsApp() {
       }, []),
     [sessions],
   );
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY);
+      if (stored) {
+        const preferences = JSON.parse(stored) as Partial<UiPreferences>;
+        const sidebarMaximum = Math.max(
+          SIDEBAR_MIN_WIDTH,
+          Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth - 360),
+        );
+        const terminalMaximum = Math.max(
+          TERMINAL_MIN_HEIGHT,
+          Math.min(TERMINAL_MAX_HEIGHT, window.innerHeight - 180),
+        );
+        if (
+          typeof preferences.sidebarWidth === "number" &&
+          Number.isFinite(preferences.sidebarWidth)
+        ) {
+          setSidebarWidth(
+            clamp(
+              preferences.sidebarWidth,
+              SIDEBAR_MIN_WIDTH,
+              sidebarMaximum,
+            ),
+          );
+        }
+        if (
+          typeof preferences.terminalHeight === "number" &&
+          Number.isFinite(preferences.terminalHeight)
+        ) {
+          setTerminalHeight(
+            clamp(
+              preferences.terminalHeight,
+              TERMINAL_MIN_HEIGHT,
+              terminalMaximum,
+            ),
+          );
+        }
+        if (Array.isArray(preferences.collapsedProjectIds)) {
+          setCollapsedProjectIds(
+            new Set(
+              preferences.collapsedProjectIds.filter(
+                (projectId): projectId is string => typeof projectId === "string",
+              ),
+            ),
+          );
+        }
+      }
+    } catch {
+      // Ignore malformed or unavailable local storage and keep safe defaults.
+    } finally {
+      setPreferencesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!preferencesLoaded) return;
+    const preferences: UiPreferences = {
+      sidebarWidth,
+      terminalHeight,
+      collapsedProjectIds: Array.from(collapsedProjectIds),
+    };
+    try {
+      window.localStorage.setItem(
+        UI_PREFERENCES_STORAGE_KEY,
+        JSON.stringify(preferences),
+      );
+    } catch {
+      // The UI remains usable when storage is disabled or full.
+    }
+  }, [collapsedProjectIds, preferencesLoaded, sidebarWidth, terminalHeight]);
 
   useEffect(() => {
     void fetch("/api/sessions", { cache: "no-store" })
@@ -201,6 +304,25 @@ export function MyAgentsApp() {
   function openProjectSessionDialog(project: ProjectGroup) {
     setCwd(project.path);
     setDialogOpen(true);
+  }
+
+  async function syncSessions() {
+    setSyncing(true);
+    setPageError(null);
+    try {
+      const response = await fetch("/api/sessions?sync=1", { cache: "no-store" });
+      const data = (await response.json()) as SessionsResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error ?? "Could not sync agent sessions.");
+      }
+      setSessions(data.sessions);
+      setAgents(data.agents);
+      setSyncErrors(data.syncErrors);
+    } catch (error) {
+      setPageError(getError(error));
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function refreshSession(id: string, showLoading = false) {
@@ -355,8 +477,11 @@ export function MyAgentsApp() {
   }
 
   return (
-    <main className="grid h-dvh min-h-[540px] grid-cols-[272px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background">
-      <aside className="flex min-h-0 flex-col border-r bg-sidebar">
+    <main
+      className="grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background"
+      style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
+    >
+      <aside className="relative flex min-h-0 flex-col border-r bg-sidebar">
         <div className="flex h-16 shrink-0 items-center gap-3 px-5">
           <div className="flex size-8 items-center justify-center rounded-lg bg-foreground text-background">
             <Sparkles className="size-4" />
@@ -378,10 +503,10 @@ export function MyAgentsApp() {
         <Separator />
         <ScrollArea className="min-h-0 flex-1">
           <div className="overflow-x-hidden px-3 py-3">
-            <p className="mb-2 px-2 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Sessions</p>
+            <div className="mb-2 flex h-6 items-center justify-between pl-2 pr-1"><p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Sessions</p><Button type="button" variant="ghost" size="xs" disabled={loading || syncing} onClick={() => void syncSessions()} aria-label="Sync agent sessions"><RefreshCw className={cn(syncing && "animate-spin")} />{syncing ? "Syncing" : "Sync"}</Button></div>
             {loading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading" /> : sessions.length === 0 ? (
               <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">No sessions yet. Start one with any installed ACP agent.</p>
-            ) : <div className="w-[248px] max-w-full space-y-1">{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center gap-1" onMouseEnter={() => setHoveredProjectId(project.id)} onMouseLeave={() => setHoveredProjectId((current) => current === project.id ? null : current)}><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span></button><Button type="button" variant="ghost" size="xs" className={cn("mr-1 opacity-0 transition-opacity focus-visible:opacity-100", hoveredProjectId === project.id && "opacity-100")} aria-label={`New session in ${project.name}`} onClick={() => openProjectSessionDialog(project)}><Plus />New</Button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
+            ) : <div data-slot="session-directory" className="max-w-full space-y-1" style={{ width: sidebarWidth - SIDEBAR_HORIZONTAL_PADDING }}>{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center gap-1" onMouseEnter={() => setHoveredProjectId(project.id)} onMouseLeave={() => setHoveredProjectId((current) => current === project.id ? null : current)}><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span></button><Button type="button" variant="ghost" size="xs" className={cn("mr-1 opacity-0 transition-opacity focus-visible:opacity-100", hoveredProjectId === project.id && "opacity-100")} aria-label={`New session in ${project.name}`} onClick={() => openProjectSessionDialog(project)}><Plus />New</Button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
               <button key={session.id} onClick={() => setSelectedId(session.id)} className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors", selectedId === session.id ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{session.title}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
@@ -404,13 +529,32 @@ export function MyAgentsApp() {
           </div>
         </ScrollArea>
         <div className="border-t p-3"><div className="flex items-center gap-2 rounded-lg px-2 py-2"><Avatar className="size-7 rounded-md"><AvatarFallback className="rounded-md bg-muted"><Code2 /></AvatarFallback></Avatar><div className="min-w-0 flex-1"><p className="text-xs font-medium">Local agents</p><p className="truncate text-[10px] text-muted-foreground">{agents.filter(({ enabled }) => enabled).length} ACP agents</p></div><ThemeToggle /><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
+        <ResizeHandle
+          orientation="vertical"
+          value={sidebarWidth}
+          min={SIDEBAR_MIN_WIDTH}
+          max={SIDEBAR_MAX_WIDTH}
+          label="Resize sidebar"
+          onChange={(value) => {
+            const maximum = Math.max(
+              SIDEBAR_MIN_WIDTH,
+              Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth - 360),
+            );
+            setSidebarWidth(Math.min(maximum, value));
+          }}
+        />
       </aside>
 
-      <section className="flex min-h-0 min-w-0 select-text flex-col">
+      <section className="flex min-h-0 min-w-0 flex-col">
         {selected ? <>
-          <header className="flex h-16 shrink-0 items-center justify-between border-b px-6"><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">{selected.title}</h1><AgentBadge session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selected.cwd}</p></div><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Session options"><MoreHorizontal /></Button></TooltipTrigger><TooltipContent>Session options are coming next</TooltipContent></Tooltip></header>
-          <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message, index) => <Message key={message.id} message={message} isStreaming={selected.status === "running" && message.role === "assistant" && index === selected.messages.length - 1} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
-          <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error"} /><div className="flex items-center justify-end px-1 pb-1">{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={sendMessage} disabled={!draft.trim() || selected.status === "error"} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
+          <header className="flex h-16 shrink-0 items-center justify-between border-b px-6"><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-semibold">{selected.title}</h1><AgentBadge session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{selected.cwd}</p></div><div className="flex items-center gap-1"><Tooltip><TooltipTrigger asChild><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></TooltipTrigger><TooltipContent>{terminalOpen ? "Close terminal" : "Open terminal"}</TooltipContent></Tooltip><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="Session options"><MoreHorizontal /></Button></TooltipTrigger><TooltipContent>Session options are coming next</TooltipContent></Tooltip></div></header>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex min-h-0 flex-1 flex-col">
+              <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message, index) => <Message key={message.id} message={message} isStreaming={selected.status === "running" && message.role === "assistant" && index === selected.messages.length - 1} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
+              <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error"} /><div className="flex items-center justify-end px-1 pb-1">{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={sendMessage} disabled={!draft.trim() || selected.status === "error"} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
+            </div>
+            <TerminalPanel sessionId={selected.id} cwd={selected.cwd} open={terminalOpen} height={terminalHeight} onHeightChange={setTerminalHeight} onClose={() => setTerminalOpen(false)} />
+          </div>
         </> : <NoSession loading={loading} error={pageError} onCreate={() => setDialogOpen(true)} />}
       </section>
     </main>
@@ -655,20 +799,55 @@ function EmptyConversation() {
 function Message({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
   const user = message.role === "user";
   if (user) {
-    return <article className="ml-auto max-w-[85%] rounded-xl bg-muted px-4 py-2.5"><p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{message.content}</p></article>;
+    return <article className="ml-auto max-w-[85%] rounded-xl bg-muted px-4 py-2.5"><p className="select-text whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{message.content}</p></article>;
   }
 
   return (
     <article>
       <Streamdown
-        className="break-words text-[13px] leading-6 text-foreground/90"
+        className="select-text break-words text-[13px] leading-6 text-foreground/90"
         isAnimating={isStreaming}
+        linkSafety={streamdownLinkSafety}
         mode={isStreaming ? "streaming" : "static"}
         plugins={streamdownPlugins}
       >
         {message.content}
       </Streamdown>
     </article>
+  );
+}
+
+function ExternalLinkSafetyModal({
+  isOpen,
+  onClose,
+  onConfirm,
+  url,
+}: LinkSafetyModalProps) {
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Open external link?</DialogTitle>
+          <DialogDescription>
+            You&apos;re about to visit an external website.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="max-h-32 overflow-y-auto break-all rounded-lg bg-muted p-3 font-mono text-xs">
+          {url}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button
+            onClick={() => {
+              onConfirm();
+              onClose();
+            }}
+          >
+            Open link
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
