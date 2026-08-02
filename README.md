@@ -103,8 +103,16 @@ missing or broken.
 ```bash
 npm run typecheck
 npm run lint
+npm test
+npm run test:e2e
 npm run build
 ```
+
+The Vitest suite uses isolated temporary SQLite databases and a deterministic
+stdio ACP fixture. The Playwright migration guard builds the application into
+`.next-e2e`, starts it with its own data directory, and exercises session
+creation, streaming, model configuration, permissions, terminal I/O, and
+reload restoration without contacting a real Agent.
 
 ## Limitations
 

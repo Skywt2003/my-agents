@@ -95,6 +95,11 @@ type ActivityRow = {
 
 let database: Database.Database | null = null;
 
+export function closeDatabase() {
+  database?.close();
+  database = null;
+}
+
 export function dataDirectory() {
   return (
     process.env.MYAGENTS_DATA_DIR ??

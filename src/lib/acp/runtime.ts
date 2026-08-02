@@ -863,6 +863,20 @@ export async function closeSession(id: string) {
   }
 }
 
+export function shutdownRuntime() {
+  for (const runtime of store.sessions.values()) {
+    for (const permission of runtime.permissions.values()) {
+      permission.resolve({ outcome: { outcome: "cancelled" } });
+    }
+    runtime.permissions.clear();
+    runtime.connection.close();
+    runtime.process.kill();
+  }
+  store.sessions.clear();
+  store.activations.clear();
+  store.sync = null;
+}
+
 export function defaultWorkingDirectory() {
   return process.cwd();
 }

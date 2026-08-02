@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  distDir: process.env.MYAGENTS_NEXT_DIST_DIR ?? ".next",
   allowedDevOrigins: ["my-agents.dev.skywt"],
   images: {
     remotePatterns: [

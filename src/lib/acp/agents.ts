@@ -118,6 +118,20 @@ function seedAgent(input: AgentInput & { id: string }) {
 }
 
 export function ensureDefaultAgentInstallations() {
+  const testAgentPath = process.env.MYAGENTS_TEST_AGENT_PATH;
+  if (testAgentPath) {
+    seedAgent({
+      id: "fake-agent",
+      name: "Fake Agent",
+      description: "Deterministic ACP agent used by automated tests",
+      command: process.execPath,
+      args: [testAgentPath],
+      source: "system",
+    });
+  }
+
+  if (process.env.MYAGENTS_DISABLE_DEFAULT_AGENTS === "1") return;
+
   seedAgent({
     id: "codex",
     registryId: "codex-acp",

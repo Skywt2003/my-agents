@@ -264,7 +264,7 @@ function TerminalView({
         const dark = document.documentElement.classList.contains("dark");
         const terminal = new Terminal({
           cursorBlink: true,
-          fontFamily: "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           fontSize: 12,
           lineHeight: 1.25,
           scrollback: 5_000,
