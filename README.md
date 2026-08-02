@@ -7,7 +7,7 @@ so it can later move into an Electron main process.
 
 ## Features
 
-- Add an agent from the official ACP Registry or configure a custom local agent
+- Add an agent from the official ACP Registry
 - Create independent sessions for any enabled ACP agent
 - Discover existing sessions when an agent advertises `session/list`
 - Group sessions by Git project, including sessions created from linked worktrees
@@ -17,7 +17,7 @@ so it can later move into an Electron main process.
 - Show tool activity and agent state
 - Review ACP permission requests before a command or file operation continues
 - Cancel a running turn
-- Store each agent's reported capabilities and authentication methods
+- Store each agent's reported capabilities
 - Keep discovered and MyAgents-created sessions across application restarts
 
 ## Run locally
@@ -30,8 +30,8 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000), choose **New session**,
-select an agent, and enter an absolute workspace path. Use **Manage ACP
-agents** to browse the Registry or add a command manually.
+select an agent, and enter an absolute workspace path. Use **Settings** to
+browse and install agents from the official ACP Registry.
 
 For development-only access through the local Caddy and Tailscale setup, run:
 
@@ -45,13 +45,13 @@ not use this port or remote entry point.
 
 The initial installation detects these local commands when available:
 
-- Codex through the bundled `@agentclientprotocol/codex-acp` adapter
+- Codex through the system `codex` command, translated to ACP by the internal adapter
 - OpenCode through `opencode acp`
 - Grok Build through `grok agent stdio`
 
 These are seed configurations, not special runtime integrations. All three use
-the same ACP client path. To force the Codex adapter to use another local Codex
-installation:
+the same ACP client path. The Codex adapter always delegates to the system
+`codex` command. To select a different local Codex installation:
 
 ```bash
 MYAGENTS_CODEX_PATH=/absolute/path/to/codex npm run dev
@@ -60,11 +60,9 @@ MYAGENTS_CODEX_PATH=/absolute/path/to/codex npm run dev
 OpenCode and Grok Build are resolved from `PATH`. Override them with
 `MYAGENTS_OPENCODE_PATH` and `MYAGENTS_GROK_PATH` when needed.
 
-Authentication normally comes from the agent's existing local configuration.
-When an agent advertises an ACP agent-managed authentication method, the
-settings dialog can start it through the standard `authenticate` request.
-Environment-variable and terminal-based methods must be configured in the
-agent's environment or terminal before it is launched.
+Authentication must be completed with each agent's own command-line tools
+before MyAgents launches it. MyAgents does not expose ACP authentication methods
+or store API keys.
 
 Session and agent data is stored at `.myagents/myagents.db` by default. Set
 `MYAGENTS_DATA_DIR` to move it; an Electron wrapper should point this variable
@@ -77,13 +75,13 @@ stored below the same data directory.
 Browser UI
   -> Next.js route handlers (NDJSON streaming)
     -> SQLite agent/session persistence + active session runtime
-      -> ACP TypeScript SDK (initialize, authenticate, list/load/resume, prompt)
+      -> ACP TypeScript SDK (initialize, list/load/resume, prompt)
         -> Configured ACP subprocess (stdio)
           -> Agent sessions
 ```
 
-`src/lib/acp/agents.ts` owns Registry/custom agent configuration and
-installation. `src/lib/acp/runtime.ts` owns the generic ACP lifecycle and makes
+`src/lib/acp/agents.ts` owns Registry agent configuration and installation.
+`src/lib/acp/runtime.ts` owns the generic ACP lifecycle and makes
 decisions from capabilities returned by `initialize`; it does not branch on an
 agent's product name. The React UI only consumes the local HTTP contract. For
 Electron, this boundary can move to the main process while preserving the
@@ -94,12 +92,6 @@ session and event types in `src/lib/myagents`.
 The official Registry entries currently use npm, `uvx`, or downloadable binary
 distributions. MyAgents installs the selected distribution into its managed
 data directory and records the resulting command, arguments, and environment.
-
-For an agent that is not in the Registry, add a custom agent with:
-
-- a stable local ID and display name
-- an executable or absolute executable path
-- its stdio ACP arguments
 
 An agent is usable if it implements ACP initialization and session creation.
 History sync and restoration remain capability-dependent: MyAgents will not

@@ -5,7 +5,6 @@ import { Plus, SquareTerminal, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { ResizeHandle } from "@/components/resize-handle";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalInfo, TerminalStreamEvent } from "@/lib/myagents/types";
 import { cn } from "@/lib/utils";
 
@@ -195,41 +194,28 @@ export function TerminalPanel({
           ))}
         </div>
         <div className="ml-2 flex shrink-0 items-center gap-0.5">
-          <Tooltip>
-            <TooltipTrigger
-              render={<Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => void createTab()}
-                disabled={creating}
-                aria-label="New terminal"
-              />}
-            >
-              <Plus />
-            </TooltipTrigger>
-            <TooltipContent>New terminal</TooltipContent>
-          </Tooltip>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => void createTab()}
+            disabled={creating}
+            aria-label="New terminal"
+          >
+            <Plus />
+          </Button>
           {session.activeId && (
-            <Tooltip>
-              <TooltipTrigger
-                render={<Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => void closeTab(session.activeId!)}
-                  aria-label="Kill active terminal"
-                />}
-              >
-                <Trash2 />
-              </TooltipTrigger>
-              <TooltipContent>Kill terminal</TooltipContent>
-            </Tooltip>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => void closeTab(session.activeId!)}
+              aria-label="Kill active terminal"
+            >
+              <Trash2 />
+            </Button>
           )}
-          <Tooltip>
-            <TooltipTrigger render={<Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close terminal panel" />}>
-              <X />
-            </TooltipTrigger>
-            <TooltipContent>Close panel</TooltipContent>
-          </Tooltip>
+          <Button variant="ghost" size="icon-xs" onClick={onClose} aria-label="Close terminal panel">
+            <X />
+          </Button>
         </div>
       </div>
       <div className="relative min-h-0 flex-1 bg-white dark:bg-[#111116]">
