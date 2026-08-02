@@ -5,13 +5,14 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 
 import type {
-  AgentAuthMethod,
   AgentCapabilities,
   AgentId,
   AgentInput,
   AgentSource,
   ChatMessage,
+  ProjectInput,
   SessionSource,
+  SessionProject,
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
@@ -21,6 +22,7 @@ export type InstalledAgent = {
   id: AgentId;
   registryId?: string;
   name: string;
+  iconUrl?: string;
   version?: string;
   description?: string;
   command: string;
@@ -29,7 +31,6 @@ export type InstalledAgent = {
   source: AgentSource;
   enabled: boolean;
   capabilities?: AgentCapabilities;
-  authMethods: AgentAuthMethod[];
   error?: string;
 };
 
@@ -37,6 +38,7 @@ type AgentRow = {
   id: string;
   registry_id: string | null;
   name: string;
+  icon_url: string | null;
   version: string | null;
   description: string | null;
   command: string;
@@ -45,7 +47,6 @@ type AgentRow = {
   source: AgentSource;
   enabled: number;
   capabilities_json: string | null;
-  auth_methods_json: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;
@@ -56,12 +57,26 @@ type SessionRow = {
   acp_session_id: string;
   agent_id: AgentId;
   agent_name: string;
+  agent_icon_url: string | null;
   agent_capabilities_json: string | null;
   title: string;
+  title_mode: "default" | "custom";
+  custom_title: string | null;
   cwd: string;
   source: SessionSource;
+  agent_visibility: "active" | "archived" | "unknown";
+  last_seen_sync: string | null;
   created_at: string;
   updated_at: string;
+  project_id: string | null;
+  project_name: string | null;
+  project_path: string | null;
+};
+
+type ProjectRow = {
+  id: string;
+  name: string;
+  path: string;
 };
 
 type MessageRow = {
@@ -100,6 +115,84 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+function createAgentsTable(db: Database.Database, table = "agents") {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${table} (
+      id TEXT PRIMARY KEY,
+      registry_id TEXT,
+      name TEXT NOT NULL,
+      icon_url TEXT,
+      version TEXT,
+      description TEXT,
+      command TEXT NOT NULL,
+      args_json TEXT NOT NULL DEFAULT '[]',
+      env_json TEXT NOT NULL DEFAULT '{}',
+      source TEXT NOT NULL CHECK (source IN ('system', 'registry')),
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+      capabilities_json TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+}
+
+function migrateAgentsToSystemSources(db: Database.Database) {
+  const table = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agents'")
+    .get() as { sql: string } | undefined;
+  if (!table) {
+    createAgentsTable(db);
+    return;
+  }
+
+  const columns = db.pragma("table_info(agents)") as Array<{ name: string }>;
+  const hasAuthMethods = columns.some(({ name }) => name === "auth_methods_json");
+  if (
+    !table.sql.includes("'bundled'") &&
+    !table.sql.includes("'custom'") &&
+    !hasAuthMethods
+  ) return;
+
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec("DROP TABLE IF EXISTS agents_system_sources");
+      createAgentsTable(db, "agents_system_sources");
+      db.exec(`
+        INSERT INTO agents_system_sources (
+          id, registry_id, name, version, description, command, args_json,
+          env_json, source, enabled, capabilities_json, last_error,
+          created_at, updated_at
+        )
+        SELECT
+          id, registry_id, name, version, description, command, args_json,
+          env_json,
+          CASE WHEN source IN ('bundled', 'custom') THEN 'system' ELSE source END,
+          enabled, capabilities_json, last_error, created_at, updated_at
+        FROM agents;
+        DROP TABLE agents;
+        ALTER TABLE agents_system_sources RENAME TO agents;
+      `);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+}
+
+function addAgentIconColumn(db: Database.Database) {
+  const columns = db.pragma("table_info(agents)") as Array<{ name: string }>;
+  if (!columns.some(({ name }) => name === "icon_url")) {
+    db.exec("ALTER TABLE agents ADD COLUMN icon_url TEXT");
+  }
+  db.exec(`
+    UPDATE agents
+    SET icon_url = 'https://cdn.agentclientprotocol.com/registry/v1/latest/'
+      || registry_id || '.svg'
+    WHERE icon_url IS NULL AND registry_id IS NOT NULL
+  `);
+}
+
 function createSessionsTable(db: Database.Database, table = "sessions") {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ${table} (
@@ -107,13 +200,111 @@ function createSessionsTable(db: Database.Database, table = "sessions") {
       acp_session_id TEXT NOT NULL,
       agent_id TEXT NOT NULL REFERENCES agents(id),
       title TEXT NOT NULL,
+      title_mode TEXT NOT NULL DEFAULT 'default'
+        CHECK (title_mode IN ('default', 'custom')),
+      custom_title TEXT,
       cwd TEXT NOT NULL,
       source TEXT NOT NULL CHECK (source IN ('myagents', 'agent')),
+      agent_visibility TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (agent_visibility IN ('active', 'archived', 'unknown')),
+      last_seen_sync TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE (agent_id, acp_session_id)
     )
   `);
+}
+
+function createProjectsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source IN ('manual', 'discovered')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+}
+
+function addProjectSourceColumn(db: Database.Database) {
+  const columns = db.pragma("table_info(projects)") as Array<{ name: string }>;
+  if (!columns.some(({ name }) => name === "source")) {
+    db.exec(`
+      ALTER TABLE projects ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+        CHECK (source IN ('manual', 'discovered'))
+    `);
+    db.exec(`
+      UPDATE projects
+      SET source = 'discovered'
+      WHERE id LIKE 'git:%' OR id LIKE 'path:%'
+    `);
+  }
+}
+
+function pruneDiscoveredProjects(db: Database.Database) {
+  db.exec(`
+    DELETE FROM projects
+    WHERE source = 'discovered'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM sessions
+        WHERE sessions.cwd = projects.path
+          AND sessions.agent_visibility <> 'archived'
+      )
+  `);
+}
+
+function migrateSessionProjects(db: Database.Database) {
+  const rows = db.prepare("SELECT DISTINCT cwd FROM sessions").all() as Array<{
+    cwd: string;
+  }>;
+  const insert = db.prepare(`
+    INSERT INTO projects (id, name, path, source, created_at, updated_at)
+    VALUES (?, ?, ?, 'discovered', ?, ?)
+    ON CONFLICT(path) DO NOTHING
+  `);
+  const now = new Date().toISOString();
+  for (const { cwd } of rows) {
+    const discovered = projectFromWorkingDirectory(cwd);
+    const project = { id: `path:${cwd}`, name: discovered.name, path: cwd };
+    insert.run(project.id, project.name, project.path, now, now);
+  }
+}
+
+function projectForSessionWorkingDirectory(cwd: string): SessionProject {
+  const discovered = projectFromWorkingDirectory(cwd);
+  return { id: `path:${cwd}`, name: discovered.name, path: cwd };
+}
+
+function addSessionVisibilityColumns(db: Database.Database) {
+  const columns = db.pragma("table_info(sessions)") as Array<{ name: string }>;
+  if (!columns.some(({ name }) => name === "agent_visibility")) {
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN agent_visibility TEXT NOT NULL
+        DEFAULT 'unknown'
+        CHECK (agent_visibility IN ('active', 'archived', 'unknown'))
+    `);
+  }
+  if (!columns.some(({ name }) => name === "last_seen_sync")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN last_seen_sync TEXT");
+  }
+}
+
+function addSessionTitleColumns(db: Database.Database) {
+  const columns = db.pragma("table_info(sessions)") as Array<{ name: string }>;
+  if (!columns.some(({ name }) => name === "title_mode")) {
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN title_mode TEXT NOT NULL
+        DEFAULT 'default'
+        CHECK (title_mode IN ('default', 'custom'))
+    `);
+  }
+  if (!columns.some(({ name }) => name === "custom_title")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN custom_title TEXT");
+  }
 }
 
 function migrateSessionsToDynamicAgents(db: Database.Database) {
@@ -163,27 +354,17 @@ function getDatabase() {
   database = new Database(databasePath());
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS agents (
-      id TEXT PRIMARY KEY,
-      registry_id TEXT,
-      name TEXT NOT NULL,
-      version TEXT,
-      description TEXT,
-      command TEXT NOT NULL,
-      args_json TEXT NOT NULL DEFAULT '[]',
-      env_json TEXT NOT NULL DEFAULT '{}',
-      source TEXT NOT NULL CHECK (source IN ('bundled', 'system', 'registry', 'custom')),
-      enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-      capabilities_json TEXT,
-      auth_methods_json TEXT,
-      last_error TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )
-  `);
+  createAgentsTable(database);
+  migrateAgentsToSystemSources(database);
+  addAgentIconColumn(database);
 
   migrateSessionsToDynamicAgents(database);
+  addSessionVisibilityColumns(database);
+  addSessionTitleColumns(database);
+  createProjectsTable(database);
+  addProjectSourceColumn(database);
+  migrateSessionProjects(database);
+  pruneDiscoveredProjects(database);
   database.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT NOT NULL,
@@ -227,6 +408,7 @@ function toInstalledAgent(row: AgentRow): InstalledAgent {
     id: row.id,
     registryId: row.registry_id ?? undefined,
     name: row.name,
+    iconUrl: row.icon_url ?? undefined,
     version: row.version ?? undefined,
     description: row.description ?? undefined,
     command: row.command,
@@ -238,7 +420,6 @@ function toInstalledAgent(row: AgentRow): InstalledAgent {
       row.capabilities_json,
       undefined,
     ),
-    authMethods: parseJson(row.auth_methods_json, []),
     error: row.last_error ?? undefined,
   };
 }
@@ -260,12 +441,13 @@ export function upsertAgentInstallation(input: AgentInput & { id: string }) {
   const now = new Date().toISOString();
   getDatabase().prepare(`
     INSERT INTO agents (
-      id, registry_id, name, version, description, command, args_json,
+      id, registry_id, name, icon_url, version, description, command, args_json,
       env_json, source, enabled, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       registry_id = excluded.registry_id,
       name = excluded.name,
+      icon_url = excluded.icon_url,
       version = excluded.version,
       description = excluded.description,
       command = excluded.command,
@@ -278,6 +460,7 @@ export function upsertAgentInstallation(input: AgentInput & { id: string }) {
     input.id,
     input.registryId ?? null,
     input.name,
+    input.iconUrl ?? null,
     input.version ?? null,
     input.description ?? null,
     input.command,
@@ -294,15 +477,13 @@ export function upsertAgentInstallation(input: AgentInput & { id: string }) {
 export function updateAgentHandshake(
   id: AgentId,
   capabilities: AgentCapabilities,
-  authMethods: AgentAuthMethod[],
 ) {
   getDatabase().prepare(`
     UPDATE agents
-    SET capabilities_json = ?, auth_methods_json = ?, last_error = NULL, updated_at = ?
+    SET capabilities_json = ?, last_error = NULL, updated_at = ?
     WHERE id = ?
   `).run(
     JSON.stringify(capabilities),
-    JSON.stringify(authMethods),
     new Date().toISOString(),
     id,
   );
@@ -336,8 +517,16 @@ function toSummary(
     acpSessionId: row.acp_session_id,
     agentId: row.agent_id,
     agentName: row.agent_name,
-    project: projectFromWorkingDirectory(row.cwd),
-    title: row.title,
+    agentIconUrl: row.agent_icon_url ?? undefined,
+    project: row.project_id && row.project_name && row.project_path
+      ? { id: row.project_id, name: row.project_name, path: row.project_path }
+      : projectForSessionWorkingDirectory(row.cwd),
+    title: row.title_mode === "custom" && row.custom_title
+      ? row.custom_title
+      : row.title,
+    agentTitle: row.title,
+    titleMode: row.title_mode,
+    customTitle: row.custom_title ?? undefined,
     cwd: row.cwd,
     source: row.source,
     status: "ready",
@@ -346,6 +535,7 @@ function toSummary(
     updatedAt: row.updated_at,
     messages,
     activities,
+    configOptions: [],
     pendingPermissions: [],
   };
 }
@@ -354,66 +544,168 @@ const sessionSelect = `
   SELECT
     sessions.*,
     agents.name AS agent_name,
-    agents.capabilities_json AS agent_capabilities_json
+    agents.icon_url AS agent_icon_url,
+    agents.capabilities_json AS agent_capabilities_json,
+    projects.id AS project_id,
+    projects.name AS project_name,
+    projects.path AS project_path
   FROM sessions
   JOIN agents ON agents.id = sessions.agent_id
+  LEFT JOIN projects ON projects.path = sessions.cwd
 `;
 
+export function listProjects() {
+  const db = getDatabase();
+  pruneDiscoveredProjects(db);
+  return (db
+    .prepare("SELECT id, name, path FROM projects ORDER BY name COLLATE NOCASE, path")
+    .all() as ProjectRow[]) satisfies SessionProject[];
+}
+
+export function getProject(id: string) {
+  return (getDatabase()
+    .prepare("SELECT id, name, path FROM projects WHERE id = ?")
+    .get(id) as ProjectRow | undefined) ?? null;
+}
+
+export function createProject(input: ProjectInput) {
+  const name = input.name.trim();
+  const path = input.path.trim();
+  if (!name) throw new Error("Project name is required.");
+  if (!path) throw new Error("Project directory is required.");
+  const now = new Date().toISOString();
+  try {
+    const project: SessionProject = { id: crypto.randomUUID(), name, path };
+    getDatabase().prepare(`
+      INSERT INTO projects (id, name, path, source, created_at, updated_at)
+      VALUES (@id, @name, @path, 'manual', @now, @now)
+    `).run({ ...project, now });
+    return project;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+      throw new Error("This directory is already bound to a project.");
+    }
+    throw error;
+  }
+}
+
+function ensureProject(project: SessionProject) {
+  const now = new Date().toISOString();
+  getDatabase().prepare(`
+    INSERT INTO projects (id, name, path, source, created_at, updated_at)
+    VALUES (?, ?, ?, 'discovered', ?, ?)
+    ON CONFLICT(path) DO NOTHING
+  `).run(project.id, project.name, project.path, now, now);
+}
+
 export function persistSession(session: SessionSummary) {
+  ensureProject(session.project);
   getDatabase()
     .prepare(`
       INSERT INTO sessions (
-        id, acp_session_id, agent_id, title, cwd, source, created_at, updated_at
+        id, acp_session_id, agent_id, title, title_mode, custom_title, cwd,
+        source, agent_visibility, created_at, updated_at
       ) VALUES (
-        @id, @acpSessionId, @agentId, @title, @cwd, @source, @createdAt, @updatedAt
+        @id, @acpSessionId, @agentId, @agentTitle, @titleMode, @customTitle,
+        @cwd, @source, 'active', @createdAt, @updatedAt
       )
       ON CONFLICT(id) DO UPDATE SET
         acp_session_id = excluded.acp_session_id,
         agent_id = excluded.agent_id,
         title = excluded.title,
+        title_mode = excluded.title_mode,
+        custom_title = excluded.custom_title,
         cwd = excluded.cwd,
         source = excluded.source,
+        agent_visibility = excluded.agent_visibility,
         updated_at = excluded.updated_at
     `)
-    .run(session);
+    .run({ ...session, customTitle: session.customTitle ?? null });
 }
 
-export function persistDiscoveredSession(input: {
+export function updatePersistedSessionTitlePreference(
+  id: string,
+  titleMode: SessionSummary["titleMode"],
+  customTitle?: string,
+) {
+  const result = getDatabase().prepare(`
+    UPDATE sessions
+    SET title_mode = ?, custom_title = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    titleMode,
+    titleMode === "custom" ? customTitle ?? null : null,
+    new Date().toISOString(),
+    id,
+  );
+  if (result.changes === 0) throw new Error("Session not found.");
+}
+
+type DiscoveredSession = {
   agentId: AgentId;
   acpSessionId: string;
   title: string;
   cwd: string;
   updatedAt: string;
-}) {
-  const db = getDatabase();
-  const existing = db
-    .prepare("SELECT id FROM sessions WHERE agent_id = ? AND acp_session_id = ?")
-    .get(input.agentId, input.acpSessionId) as { id: string } | undefined;
-  const id = existing?.id ?? crypto.randomUUID();
-  const createdAt = input.updatedAt;
+};
 
-  db.prepare(`
+export function reconcileDiscoveredSessions(
+  agentId: AgentId,
+  sessions: Omit<DiscoveredSession, "agentId">[],
+) {
+  const db = getDatabase();
+  const syncId = crypto.randomUUID();
+  const findExisting = db.prepare(
+    "SELECT id FROM sessions WHERE agent_id = ? AND acp_session_id = ?",
+  );
+  const upsert = db.prepare(`
     INSERT INTO sessions (
-      id, acp_session_id, agent_id, title, cwd, source, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'agent', ?, ?)
+      id, acp_session_id, agent_id, title, cwd, source, agent_visibility,
+      last_seen_sync, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'agent', 'active', ?, ?, ?)
     ON CONFLICT(agent_id, acp_session_id) DO UPDATE SET
       title = excluded.title,
       cwd = excluded.cwd,
+      agent_visibility = 'active',
+      last_seen_sync = excluded.last_seen_sync,
       updated_at = excluded.updated_at
-  `).run(
-    id,
-    input.acpSessionId,
-    input.agentId,
-    input.title,
-    input.cwd,
-    createdAt,
-    input.updatedAt,
-  );
+  `);
+
+  db.transaction(() => {
+    for (const session of sessions) {
+      ensureProject(projectForSessionWorkingDirectory(session.cwd));
+      const existing = findExisting.get(agentId, session.acpSessionId) as
+        | { id: string }
+        | undefined;
+      upsert.run(
+        existing?.id ?? crypto.randomUUID(),
+        session.acpSessionId,
+        agentId,
+        session.title,
+        session.cwd,
+        syncId,
+        session.updatedAt,
+        session.updatedAt,
+      );
+    }
+
+    db.prepare(`
+      UPDATE sessions
+      SET agent_visibility = 'archived'
+      WHERE agent_id = ?
+        AND (last_seen_sync IS NULL OR last_seen_sync <> ?)
+    `).run(agentId, syncId);
+    pruneDiscoveredProjects(db);
+  })();
 }
 
 export function listPersistedSessions() {
   const rows = getDatabase()
-    .prepare(`${sessionSelect} ORDER BY sessions.updated_at DESC`)
+    .prepare(`
+      ${sessionSelect}
+      WHERE sessions.agent_visibility <> 'archived'
+      ORDER BY sessions.updated_at DESC
+    `)
     .all() as SessionRow[];
   return rows.map((row) => toSummary(row));
 }

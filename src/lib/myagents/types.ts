@@ -1,7 +1,9 @@
 export type SessionStatus = "connecting" | "ready" | "running" | "error";
 export type SessionSource = "myagents" | "agent";
 export type AgentId = string;
-export type AgentSource = "bundled" | "system" | "registry" | "custom";
+export type AgentSource = "system" | "registry";
+export type SessionConfigOption =
+  import("@agentclientprotocol/sdk").SessionConfigOption;
 
 export type AgentCapabilities = {
   loadSession: boolean;
@@ -13,17 +15,11 @@ export type AgentCapabilities = {
   promptEmbeddedContext: boolean;
 };
 
-export type AgentAuthMethod = {
-  id: string;
-  name: string;
-  description?: string;
-  type: "agent" | "env_var" | "terminal" | "unknown";
-};
-
 export type AgentDescriptor = {
   id: AgentId;
   registryId?: string;
   name: string;
+  iconUrl?: string;
   version?: string;
   description?: string;
   command: string;
@@ -32,7 +28,6 @@ export type AgentDescriptor = {
   enabled: boolean;
   available: boolean;
   capabilities?: AgentCapabilities;
-  authMethods: AgentAuthMethod[];
   error?: string;
 };
 
@@ -40,6 +35,7 @@ export type AgentInput = {
   id?: string;
   registryId?: string;
   name: string;
+  iconUrl?: string;
   version?: string;
   description?: string;
   command: string;
@@ -86,6 +82,11 @@ export type SessionProject = {
   path: string;
 };
 
+export type ProjectInput = {
+  name: string;
+  path: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -113,13 +114,19 @@ export type PermissionRequest = {
   options: PermissionOption[];
 };
 
+export type SessionTitleMode = "default" | "custom";
+
 export type SessionSummary = {
   id: string;
   acpSessionId: string;
   agentId: AgentId;
   agentName: string;
+  agentIconUrl?: string;
   project: SessionProject;
   title: string;
+  agentTitle: string;
+  titleMode: SessionTitleMode;
+  customTitle?: string;
   cwd: string;
   source: SessionSource;
   status: SessionStatus;
@@ -128,6 +135,7 @@ export type SessionSummary = {
   updatedAt: string;
   messages: ChatMessage[];
   activities: ToolActivity[];
+  configOptions: SessionConfigOption[];
   pendingPermissions: PermissionRequest[];
   error?: string;
 };
@@ -137,6 +145,7 @@ export type SessionStreamEvent =
   | { type: "thought_delta"; text: string }
   | { type: "tool"; activity: ToolActivity }
   | { type: "plan"; entries: Array<{ content: string; status: string }> }
+  | { type: "config_options"; configOptions: SessionConfigOption[] }
   | { type: "permission"; permission: PermissionRequest }
   | { type: "permission_resolved"; permissionId: string }
   | { type: "status"; status: SessionStatus }

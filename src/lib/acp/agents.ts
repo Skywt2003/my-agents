@@ -1,7 +1,7 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   accessSync,
   chmodSync,
@@ -36,6 +36,10 @@ const REGISTRY_CACHE_MS = 5 * 60 * 1000;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
 let registryCache: { expiresAt: number; agents: RegistryAgent[] } | null = null;
+
+function registryIconUrl(registryId: string) {
+  return `https://cdn.agentclientprotocol.com/registry/v1/latest/${registryId}.svg`;
+}
 
 function codexAdapterPath() {
   return (
@@ -93,9 +97,22 @@ function shouldReplaceLegacyPlaceholder(agent: InstalledAgent | null) {
   );
 }
 
+function shouldRefreshSystemCodex(agent: InstalledAgent | null) {
+  if (!agent || agent.id !== "codex" || agent.registryId !== "codex-acp") {
+    return false;
+  }
+  const configuredCodex = process.env.MYAGENTS_CODEX_PATH ?? "codex";
+  return agent.source === "system" && agent.env.CODEX_PATH !== configuredCodex;
+}
+
 function seedAgent(input: AgentInput & { id: string }) {
   const existing = getAgentInstallation(input.id);
-  if (!existing || shouldReplaceLegacyPlaceholder(existing)) {
+  if (
+    !existing ||
+    shouldReplaceLegacyPlaceholder(existing) ||
+    shouldRefreshSystemCodex(existing) ||
+    (!existing.iconUrl && Boolean(input.iconUrl))
+  ) {
     upsertAgentInstallation(input);
   }
 }
@@ -105,20 +122,20 @@ export function ensureDefaultAgentInstallations() {
     id: "codex",
     registryId: "codex-acp",
     name: "Codex",
+    iconUrl: registryIconUrl("codex-acp"),
     version: "1.1.7",
     description: "ACP adapter for OpenAI Codex",
     command: process.execPath,
     args: [codexAdapterPath()],
-    env: process.env.MYAGENTS_CODEX_PATH
-      ? { CODEX_PATH: process.env.MYAGENTS_CODEX_PATH }
-      : {},
-    source: "bundled",
+    env: { CODEX_PATH: process.env.MYAGENTS_CODEX_PATH ?? "codex" },
+    source: "system",
   });
 
   seedAgent({
     id: "opencode",
     registryId: "opencode",
     name: "OpenCode",
+    iconUrl: registryIconUrl("opencode"),
     description: "OpenCode ACP server",
     command: process.env.MYAGENTS_OPENCODE_PATH ?? "opencode",
     args: ["acp"],
@@ -130,6 +147,7 @@ export function ensureDefaultAgentInstallations() {
       id: "grok-build",
       registryId: "grok-build",
       name: "Grok Build",
+      iconUrl: registryIconUrl("grok-build"),
       description: "xAI Grok Build ACP agent",
       command: process.env.MYAGENTS_GROK_PATH ?? "grok",
       args: ["agent", "stdio"],
@@ -144,6 +162,7 @@ export function listInstalledAgents(): AgentDescriptor[] {
     id: agent.id,
     registryId: agent.registryId,
     name: agent.name,
+    iconUrl: agent.iconUrl,
     version: agent.version,
     description: agent.description,
     command: agent.command,
@@ -152,7 +171,6 @@ export function listInstalledAgents(): AgentDescriptor[] {
     enabled: agent.enabled,
     available: Boolean(findCommand(agent.command)),
     capabilities: agent.capabilities,
-    authMethods: agent.authMethods,
     error: agent.error,
   }));
 }
@@ -173,30 +191,17 @@ function validateAgentId(id: string) {
   }
 }
 
-export function addCustomAgent(input: Omit<AgentInput, "source">) {
-  const id = input.id?.trim() || `custom-${randomUUID().slice(0, 8)}`;
-  validateAgentId(id);
-  if (!input.name.trim()) throw new Error("Agent name is required.");
-  if (!input.command.trim()) throw new Error("Agent command is required.");
-  return upsertAgentInstallation({
-    ...input,
-    id,
-    name: input.name.trim(),
-    command: input.command.trim(),
-    source: "custom",
-  });
-}
-
 export async function removeAgent(id: string) {
   validateAgentId(id);
   const agent = getAgentInstallation(id);
-  deleteAgentInstallation(id);
-  if (agent?.source === "registry") {
-    await rm(join(/*turbopackIgnore: true*/ dataDirectory(), "agents", id), {
-      recursive: true,
-      force: true,
-    });
+  if (!agent || agent.source !== "registry") {
+    throw new Error("Only Registry-installed agents can be removed.");
   }
+  deleteAgentInstallation(id);
+  await rm(join(/*turbopackIgnore: true*/ dataDirectory(), "agents", id), {
+    recursive: true,
+    force: true,
+  });
 }
 
 function isRegistryAgent(value: unknown): value is RegistryAgent {
@@ -445,6 +450,7 @@ export async function installRegistryAgent(registryId: string) {
     id: agent.id,
     registryId: agent.id,
     name: agent.name,
+    iconUrl: agent.icon,
     version: agent.version,
     description: agent.description,
     command: launch.command,

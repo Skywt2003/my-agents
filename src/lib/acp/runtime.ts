@@ -10,7 +10,6 @@ import { basename } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
-  AuthMethod,
   ClientConnection,
   InitializeResponse,
   PermissionOption as AcpPermissionOption,
@@ -21,14 +20,15 @@ import type {
 } from "@agentclientprotocol/sdk";
 
 import type {
-  AgentAuthMethod,
   AgentCapabilities,
   AgentId,
   ChatMessage,
   PermissionRequest,
+  SessionProject,
   SessionSource,
   SessionStatus,
   SessionStreamEvent,
+  SessionConfigOption,
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
@@ -36,17 +36,17 @@ import {
   listInstalledAgents,
   requireInstalledAgent,
 } from "@/lib/acp/agents";
-import { projectFromWorkingDirectory } from "@/lib/myagents/project";
 import {
   getPersistedSession,
   listPersistedSessions,
   persistActivity,
-  persistDiscoveredSession,
+  reconcileDiscoveredSessions,
   persistMessage,
   persistSession,
   replaceSessionContent,
   updateAgentError,
   updateAgentHandshake,
+  updatePersistedSessionTitlePreference,
   type InstalledAgent,
 } from "@/lib/persistence/database";
 
@@ -62,14 +62,19 @@ type SessionRuntime = {
   acpSessionId: string;
   agentId: AgentId;
   agentName: string;
+  agentIconUrl?: string;
   title: string;
+  titleMode: SessionSummary["titleMode"];
+  customTitle?: string;
   cwd: string;
+  project: SessionProject;
   source: SessionSource;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];
   activities: Map<string, ToolActivity>;
+  configOptions: SessionConfigOption[];
   permissions: Map<string, PendingPermission>;
   listeners: Set<Listener>;
   process: ChildProcessWithoutNullStreams;
@@ -88,7 +93,7 @@ type OpenAgent = {
 };
 
 type RuntimeStore = {
-  version: 2;
+  version: 5;
   sessions: Map<string, SessionRuntime>;
   activations: Map<string, Promise<SessionRuntime>>;
   sync: Promise<Partial<Record<AgentId, string>>> | null;
@@ -99,17 +104,17 @@ declare global {
 }
 
 const previousStore = globalThis.__myAgentsRuntimeStore;
-if (previousStore && previousStore.version !== 2) {
+if (previousStore && previousStore.version !== 5) {
   for (const session of previousStore.sessions.values()) {
     session.connection.close();
     session.process.kill();
   }
 }
 const store =
-  previousStore?.version === 2
+  previousStore?.version === 5
     ? previousStore
     : (globalThis.__myAgentsRuntimeStore = {
-        version: 2,
+        version: 5,
         sessions: new Map(),
         activations: new Map(),
         sync: null,
@@ -121,8 +126,14 @@ function serialize(runtime: SessionRuntime): SessionSummary {
     acpSessionId: runtime.acpSessionId,
     agentId: runtime.agentId,
     agentName: runtime.agentName,
-    project: projectFromWorkingDirectory(runtime.cwd),
-    title: runtime.title,
+    agentIconUrl: runtime.agentIconUrl,
+    project: runtime.project,
+    title: runtime.titleMode === "custom" && runtime.customTitle
+      ? runtime.customTitle
+      : runtime.title,
+    agentTitle: runtime.title,
+    titleMode: runtime.titleMode,
+    customTitle: runtime.customTitle,
     cwd: runtime.cwd,
     source: runtime.source,
     status: runtime.status,
@@ -132,6 +143,7 @@ function serialize(runtime: SessionRuntime): SessionSummary {
     updatedAt: runtime.updatedAt,
     messages: runtime.messages,
     activities: Array.from(runtime.activities.values()),
+    configOptions: runtime.configOptions,
     pendingPermissions: Array.from(runtime.permissions.values()).map(
       ({ request }) => request,
     ),
@@ -274,6 +286,13 @@ function handleSessionUpdate(runtime: SessionRuntime, update: SessionUpdate) {
       if (update.updatedAt) runtime.updatedAt = update.updatedAt;
       persistRuntime(runtime);
       return;
+    case "config_option_update":
+      runtime.configOptions = update.configOptions;
+      publish(runtime, {
+        type: "config_options",
+        configOptions: runtime.configOptions,
+      });
+      return;
     default:
       return;
   }
@@ -299,19 +318,6 @@ function capabilitiesFromInitialize(
     promptEmbeddedContext: Boolean(
       capabilities?.promptCapabilities?.embeddedContext,
     ),
-  };
-}
-
-function authMethodDescriptor(method: AuthMethod): AgentAuthMethod {
-  const type = "type" in method ? method.type : "agent";
-  return {
-    id: method.id,
-    name: method.name,
-    description: method.description ?? undefined,
-    type:
-      type === "agent" || type === "env_var" || type === "terminal"
-        ? type
-        : "unknown",
   };
 }
 
@@ -387,11 +393,7 @@ async function openAgent(
       );
     }
     const capabilities = capabilitiesFromInitialize(initialize);
-    updateAgentHandshake(
-      agent.id,
-      capabilities,
-      (initialize.authMethods ?? []).map(authMethodDescriptor),
-    );
+    updateAgentHandshake(agent.id, capabilities);
     return { agent, process: child, connection, initialize, capabilities };
   } catch (error) {
     updateAgentError(agent.id, processError(error));
@@ -422,9 +424,10 @@ export async function validateWorkingDirectory(cwd: string) {
 }
 
 export async function createSession(
-  cwd: string,
+  project: SessionProject,
   agentId: AgentId = "codex",
 ): Promise<SessionSummary> {
+  const cwd = project.path;
   await validateWorkingDirectory(cwd);
   const agent = requireInstalledAgent(agentId);
   const id = randomUUID();
@@ -446,14 +449,19 @@ export async function createSession(
       acpSessionId: response.sessionId,
       agentId,
       agentName: agent.name,
+      agentIconUrl: agent.iconUrl,
       title: "New session",
+      titleMode: "default",
+      customTitle: undefined,
       cwd,
+      project,
       source: "myagents",
       status: "ready",
       createdAt: now,
       updatedAt: now,
       messages: [],
       activities: new Map(),
+      configOptions: response.configOptions ?? [],
       permissions: new Map(),
       listeners: new Set(),
       process: opened.process,
@@ -470,58 +478,7 @@ export async function createSession(
     updateAgentError(agent.id, message);
     opened.connection.close(error);
     opened.process.kill();
-    const authMethods = (opened.initialize.authMethods ?? [])
-      .map(({ name }) => name)
-      .join(", ");
-    throw new Error(
-      /auth/i.test(message) && authMethods
-        ? `${message}. Available authentication: ${authMethods}.`
-        : message,
-    );
-  }
-}
-
-export async function authenticateAgent(
-  agentId: AgentId,
-  methodId: string,
-  cwd = process.cwd(),
-) {
-  await validateWorkingDirectory(cwd);
-  const agent = requireInstalledAgent(agentId);
-  const opened = await openAgent(
-    agent,
-    cwd,
-    () => undefined,
-    "authenticate",
-  );
-  try {
-    const method = (opened.initialize.authMethods ?? []).find(
-      ({ id }) => id === methodId,
-    );
-    if (!method) throw new Error("The agent did not advertise this auth method.");
-    const type = "type" in method ? method.type : "agent";
-    if (type === "terminal") {
-      throw new Error(
-        `${agent.name} requires an interactive terminal authentication flow, which MyAgents does not expose yet.`,
-      );
-    }
-    if (type === "env_var") {
-      throw new Error(
-        `${agent.name} requires credentials in its configured environment variables.`,
-      );
-    }
-    await withTimeout(
-      opened.connection.agent.request(acp.methods.agent.authenticate, {
-        methodId,
-      }),
-      `${agent.name} authentication`,
-      5 * 60_000,
-    );
-    updateAgentError(agent.id);
-    return { ok: true };
-  } finally {
-    opened.connection.close();
-    opened.process.kill();
+    throw new Error(message);
   }
 }
 
@@ -559,8 +516,12 @@ async function activatePersistedSession(id: string) {
       acpSessionId: saved.acpSessionId,
       agentId: saved.agentId,
       agentName: saved.agentName,
-      title: saved.title,
+      agentIconUrl: agent.iconUrl ?? saved.agentIconUrl,
+      title: saved.agentTitle,
+      titleMode: saved.titleMode,
+      customTitle: saved.customTitle,
       cwd: saved.cwd,
+      project: saved.project,
       source: saved.source,
       status: "connecting",
       createdAt: saved.createdAt,
@@ -571,6 +532,7 @@ async function activatePersistedSession(id: string) {
           ? []
           : saved.activities.map((activity) => [activity.id, activity]),
       ),
+      configOptions: [],
       permissions: new Map(),
       listeners: new Set(),
       process: opened.process,
@@ -582,19 +544,18 @@ async function activatePersistedSession(id: string) {
     store.sessions.set(id, runtime);
 
     try {
-      if (loadsHistory) {
-        await opened.connection.agent.request(acp.methods.agent.session.load, {
+      const response = loadsHistory
+        ? await opened.connection.agent.request(acp.methods.agent.session.load, {
+          sessionId: saved.acpSessionId,
+          cwd: saved.cwd,
+          mcpServers: [],
+        })
+        : await opened.connection.agent.request(acp.methods.agent.session.resume, {
           sessionId: saved.acpSessionId,
           cwd: saved.cwd,
           mcpServers: [],
         });
-      } else {
-        await opened.connection.agent.request(acp.methods.agent.session.resume, {
-          sessionId: saved.acpSessionId,
-          cwd: saved.cwd,
-          mcpServers: [],
-        });
-      }
+      runtime.configOptions = response.configOptions ?? [];
       runtime.hydrating = false;
       runtime.status = "ready";
       runtime.error = undefined;
@@ -624,15 +585,14 @@ async function activatePersistedSession(id: string) {
   }
 }
 
-function persistAgentSession(agentId: AgentId, session: SessionInfo) {
+function discoveredAgentSession(session: SessionInfo) {
   const updatedAt = session.updatedAt ?? new Date().toISOString();
-  persistDiscoveredSession({
-    agentId,
+  return {
     acpSessionId: session.sessionId,
     title: session.title?.trim() || basename(session.cwd) || "Untitled session",
     cwd: session.cwd,
     updatedAt,
-  });
+  };
 }
 
 async function syncAgentSessionsFor(agent: InstalledAgent) {
@@ -645,17 +605,17 @@ async function syncAgentSessionsFor(agent: InstalledAgent) {
   try {
     if (!opened.capabilities.listSessions) return;
 
+    const sessions: ReturnType<typeof discoveredAgentSession>[] = [];
     let cursor: string | null | undefined;
     do {
       const response = await opened.connection.agent.request(
         acp.methods.agent.session.list,
         cursor ? { cursor } : {},
       );
-      response.sessions.forEach((session) =>
-        persistAgentSession(agent.id, session),
-      );
+      sessions.push(...response.sessions.map(discoveredAgentSession));
       cursor = response.nextCursor;
     } while (cursor);
+    reconcileDiscoveredSessions(agent.id, sessions);
   } finally {
     opened.connection.close();
     opened.process.kill();
@@ -725,6 +685,37 @@ export async function getSession(id: string) {
   }
 }
 
+export function updateSessionTitlePreference(
+  id: string,
+  titleMode: SessionSummary["titleMode"],
+  customTitle?: string,
+) {
+  if (titleMode !== "default" && titleMode !== "custom") {
+    throw new Error("Session title mode must be default or custom.");
+  }
+  const normalizedCustomTitle = customTitle?.trim();
+  if (titleMode === "custom" && !normalizedCustomTitle) {
+    throw new Error("Custom session name is required.");
+  }
+  if (normalizedCustomTitle && normalizedCustomTitle.length > 200) {
+    throw new Error("Custom session name must be 200 characters or fewer.");
+  }
+
+  const active = store.sessions.get(id);
+  if (active) {
+    active.titleMode = titleMode;
+    active.customTitle = titleMode === "custom" ? normalizedCustomTitle : undefined;
+    active.updatedAt = new Date().toISOString();
+    persistRuntime(active);
+    return serialize(active);
+  }
+
+  updatePersistedSessionTitlePreference(id, titleMode, normalizedCustomTitle);
+  const saved = getPersistedSession(id);
+  if (!saved) throw new Error("Session not found.");
+  return saved;
+}
+
 function requireActiveSession(id: string) {
   const runtime = store.sessions.get(id);
   if (!runtime) throw new Error("Session is not active.");
@@ -777,6 +768,47 @@ export async function promptSession(id: string, text: string) {
     publish(runtime, { type: "error", message });
     throw error;
   }
+}
+
+export async function setSessionConfigOption(
+  id: string,
+  configId: string,
+  value: string | boolean,
+) {
+  const runtime = await activatePersistedSession(id);
+  if (runtime.status === "running") {
+    throw new Error("Session configuration cannot change while the agent is working.");
+  }
+
+  const option = runtime.configOptions.find(
+    (item: SessionConfigOption) => item.id === configId,
+  );
+  if (!option) throw new Error("Session configuration option not found.");
+  if (option.type === "boolean" && typeof value !== "boolean") {
+    throw new Error("This session configuration option requires a boolean value.");
+  }
+  if (option.type === "select" && typeof value !== "string") {
+    throw new Error("This session configuration option requires a selected value.");
+  }
+
+  const params = typeof value === "boolean"
+    ? {
+        sessionId: runtime.acpSessionId,
+        configId,
+        type: "boolean" as const,
+        value,
+      }
+    : { sessionId: runtime.acpSessionId, configId, value };
+  const response = await runtime.connection.agent.request(
+    acp.methods.agent.session.setConfigOption,
+    params,
+  );
+  runtime.configOptions = response.configOptions;
+  publish(runtime, {
+    type: "config_options",
+    configOptions: runtime.configOptions,
+  });
+  return serialize(runtime);
 }
 
 export function resolvePermission(
