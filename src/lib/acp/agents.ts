@@ -1,39 +1,38 @@
-import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
-  accessSync,
-  chmodSync,
-  constants,
-  existsSync,
-  mkdirSync,
-} from "node:fs";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { tmpdir } from "node:os";
-import { promisify } from "node:util";
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
+import { basename, delimiter, isAbsolute, join, resolve } from "node:path";
+import { Readable, Writable } from "node:stream";
+import * as acp from "@agentclientprotocol/sdk";
 
 import type {
   AgentDescriptor,
+  AgentCapabilities,
   AgentInput,
   RegistryAgent,
-  RegistryBinaryTarget,
 } from "@/lib/myagents/types";
 import {
   dataDirectory,
   deleteAgentInstallation,
   getAgentInstallation,
   listAgentInstallations,
+  updateAgentHandshake,
   upsertAgentInstallation,
   type InstalledAgent,
 } from "@/lib/persistence/database";
 
-const execFileAsync = promisify(execFile);
 const REGISTRY_URL =
   "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 const REGISTRY_CACHE_MS = 5 * 60 * 1000;
-const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 
-let registryCache: { expiresAt: number; agents: RegistryAgent[] } | null = null;
+let registryCache: {
+  source: string;
+  expiresAt: number;
+  agents: RegistryAgent[];
+} | null = null;
 
 function registryIconUrl(registryId: string) {
   return `https://cdn.agentclientprotocol.com/registry/v1/latest/${registryId}.svg`;
@@ -105,6 +104,7 @@ function shouldRefreshSystemCodex(agent: InstalledAgent | null) {
 
 function seedAgent(input: AgentInput & { id: string }) {
   const existing = getAgentInstallation(input.id);
+  if (existing && !existing.enabled) return;
   if (
     !existing ||
     shouldReplaceLegacyPlaceholder(existing) ||
@@ -170,21 +170,29 @@ export function ensureDefaultAgentInstallations() {
 
 export function listInstalledAgents(): AgentDescriptor[] {
   ensureDefaultAgentInstallations();
-  return listAgentInstallations().map((agent) => ({
-    id: agent.id,
-    registryId: agent.registryId,
-    name: agent.name,
-    iconUrl: agent.iconUrl,
-    version: agent.version,
-    description: agent.description,
-    command: agent.command,
-    args: agent.args,
-    source: agent.source,
-    enabled: agent.enabled,
-    available: Boolean(findCommand(agent.command)),
-    capabilities: agent.capabilities,
-    error: agent.error,
-  }));
+  return listAgentInstallations().filter(({ enabled }) => enabled).map((agent) => {
+    const usesCodexAdapter =
+      agent.id === "codex" && agent.registryId === "codex-acp";
+    return {
+      id: agent.id,
+      registryId: agent.registryId,
+      name: agent.name,
+      iconUrl: agent.iconUrl,
+      version: agent.version,
+      description: agent.description,
+      command: agent.command,
+      args: agent.args,
+      displayCommand: usesCodexAdapter
+        ? (agent.env.CODEX_PATH ?? "codex")
+        : [agent.command, ...agent.args].join(" "),
+      adapter: usesCodexAdapter ? "codex-acp" : undefined,
+      source: agent.source,
+      enabled: agent.enabled,
+      available: Boolean(findCommand(agent.command)),
+      capabilities: agent.capabilities,
+      error: agent.error,
+    };
+  });
 }
 
 export function requireInstalledAgent(id: string) {
@@ -206,14 +214,16 @@ function validateAgentId(id: string) {
 export async function removeAgent(id: string) {
   validateAgentId(id);
   const agent = getAgentInstallation(id);
-  if (!agent || agent.source !== "registry") {
-    throw new Error("Only Registry-installed agents can be removed.");
+  if (!agent || !agent.enabled) {
+    throw new Error("This Agent is not currently added.");
   }
   deleteAgentInstallation(id);
-  await rm(join(/*turbopackIgnore: true*/ dataDirectory(), "agents", id), {
-    recursive: true,
-    force: true,
-  });
+  if (agent.source === "registry") {
+    await rm(join(/*turbopackIgnore: true*/ dataDirectory(), "agents", id), {
+      recursive: true,
+      force: true,
+    });
+  }
 }
 
 function isRegistryAgent(value: unknown): value is RegistryAgent {
@@ -230,16 +240,32 @@ function isRegistryAgent(value: unknown): value is RegistryAgent {
 }
 
 export async function fetchAgentRegistry() {
-  if (registryCache && registryCache.expiresAt > Date.now()) {
+  const localPath = process.env.MYAGENTS_REGISTRY_PATH;
+  const source = localPath ? resolve(localPath) : REGISTRY_URL;
+  if (
+    registryCache &&
+    registryCache.source === source &&
+    registryCache.expiresAt > Date.now()
+  ) {
     return registryCache.agents;
   }
-  const response = await fetch(REGISTRY_URL, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`ACP Registry returned HTTP ${response.status}.`);
-  }
-  const payload = (await response.json()) as { agents?: unknown[] };
+  const payload = localPath
+    ? JSON.parse(
+        await readFile(/*turbopackIgnore: true*/ source, "utf8"),
+      ) as { agents?: unknown[] }
+    : await (async () => {
+        const response = await fetch(REGISTRY_URL, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`ACP Registry returned HTTP ${response.status}.`);
+        }
+        return response.json() as Promise<{ agents?: unknown[] }>;
+      })();
   const agents = (payload.agents ?? []).filter(isRegistryAgent);
-  registryCache = { agents, expiresAt: Date.now() + REGISTRY_CACHE_MS };
+  registryCache = {
+    source,
+    agents,
+    expiresAt: Date.now() + REGISTRY_CACHE_MS,
+  };
   return agents;
 }
 
@@ -260,6 +286,8 @@ function platformTarget() {
 }
 
 function packageNameFromSpec(spec: string) {
+  const pythonVersion = spec.search(/[<>=!~]/);
+  if (pythonVersion > 0) return spec.slice(0, pythonVersion);
   if (spec.startsWith("@")) {
     const separator = spec.indexOf("@", 1);
     return separator > 0 ? spec.slice(0, separator) : spec;
@@ -268,162 +296,153 @@ function packageNameFromSpec(spec: string) {
   return separator > 0 ? spec.slice(0, separator) : spec;
 }
 
-function packageDirectory(root: string, packageName: string) {
-  return join(
-    /*turbopackIgnore: true*/ root,
-    "node_modules",
-    ...packageName.split("/"),
-  );
+type AgentLaunch = {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+};
+
+function executableNameFromPackage(spec: string) {
+  return packageNameFromSpec(spec).split("/").at(-1) ?? spec;
 }
 
-async function installNpxAgent(agent: RegistryAgent) {
-  const distribution = agent.distribution.npx!;
-  const root = join(
-    /*turbopackIgnore: true*/ dataDirectory(),
-    "agents",
-    agent.id,
-    agent.version,
-  );
-  mkdirSync(root, { recursive: true });
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  await execFileAsync(
-    npm,
-    [
-      "install",
-      "--prefix",
-      root,
-      "--no-audit",
-      "--no-fund",
-      distribution.package,
-    ],
-    { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 },
-  );
+function executableCandidates(agent: RegistryAgent) {
+  const packageDistribution = agent.distribution.npx ?? agent.distribution.uvx;
+  const platform = platformTarget();
+  const binaryDistribution = platform
+    ? agent.distribution.binary?.[platform]
+    : undefined;
+  const declared = packageDistribution
+    ? executableNameFromPackage(packageDistribution.package)
+    : binaryDistribution
+      ? basename(binaryDistribution.cmd)
+      : null;
+  if (!declared) return [];
+  const simplified = declared.replace(/-(?:cli|acp|agent)$/, "");
+  return Array.from(new Set([
+    ...(binaryDistribution ? [declared, agent.id] : [agent.id, declared]),
+    simplified,
+  ].filter(Boolean)));
+}
 
-  const packageName = packageNameFromSpec(distribution.package);
-  const packageJson = JSON.parse(
-    await readFile(
-      /*turbopackIgnore: true*/ join(
-        packageDirectory(root, packageName),
-        "package.json",
-      ),
-      "utf8",
+function resolveInstalledLaunch(agent: RegistryAgent): AgentLaunch {
+  const packageDistribution = agent.distribution.npx ?? agent.distribution.uvx;
+  const platform = platformTarget();
+  const binaryDistribution = platform
+    ? agent.distribution.binary?.[platform]
+    : undefined;
+  const candidates = executableCandidates(agent);
+  if (candidates.length === 0) {
+    throw new Error(`${agent.name} has no launch command for this platform.`);
+  }
+
+  const command = candidates.map(findCommand).find(Boolean);
+  if (!command) {
+    throw new Error(
+      `${agent.name} is not installed. Expected executable: ${candidates.join(" or ")}`,
+    );
+  }
+  const distribution = packageDistribution ?? binaryDistribution!;
+  return {
+    command,
+    args: distribution.args ?? [],
+    env: distribution.env ?? {},
+  };
+}
+
+function capabilitiesFromInitialize(
+  initialize: acp.InitializeResponse,
+): AgentCapabilities {
+  const capabilities = initialize.agentCapabilities;
+  return {
+    loadSession: Boolean(capabilities?.loadSession),
+    listSessions: Boolean(capabilities?.sessionCapabilities?.list),
+    resumeSession: Boolean(capabilities?.sessionCapabilities?.resume),
+    closeSession: Boolean(capabilities?.sessionCapabilities?.close),
+    promptImage: Boolean(capabilities?.promptCapabilities?.image),
+    promptAudio: Boolean(capabilities?.promptCapabilities?.audio),
+    promptEmbeddedContext: Boolean(
+      capabilities?.promptCapabilities?.embeddedContext,
     ),
-  ) as { bin?: string | Record<string, string> };
-  const binName = typeof packageJson.bin === "string"
-    ? packageName.split("/").at(-1)
-    : Object.keys(packageJson.bin ?? {})[0];
-  if (!binName) throw new Error(`${agent.name} package does not expose an executable.`);
-  const command = join(
-    /*turbopackIgnore: true*/ root,
-    "node_modules",
-    ".bin",
-    process.platform === "win32" ? `${binName}.cmd` : binName,
-  );
-  if (!existsSync(/*turbopackIgnore: true*/ command)) {
-    throw new Error(`${agent.name} executable was not installed at ${command}.`);
-  }
-  return { command, args: distribution.args ?? [], env: distribution.env ?? {} };
+  };
 }
 
-function validateArchiveEntries(entries: string[]) {
-  for (const entry of entries) {
-    const normalized = entry.replaceAll("\\", "/");
-    if (
-      normalized.startsWith("/") ||
-      normalized.split("/").includes("..") ||
-      /^[a-zA-Z]:\//.test(normalized)
-    ) {
-      throw new Error(`Unsafe path in agent archive: ${entry}`);
-    }
-  }
-}
-
-function safeInstalledPath(root: string, candidate: string) {
-  const path = resolve(/*turbopackIgnore: true*/ root, candidate);
-  const relation = relative(root, path);
-  if (relation.startsWith("..") || isAbsolute(relation)) {
-    throw new Error("Agent manifest command points outside its install directory.");
-  }
-  return path;
-}
-
-async function extractBinaryArchive(
-  archivePath: string,
-  fileName: string,
-  destination: string,
+async function stopProbe(
+  child: ChildProcessWithoutNullStreams,
+  connection: acp.ClientConnection,
 ) {
-  if (/\.(zip)$/i.test(fileName)) {
-    const { stdout } = await execFileAsync("unzip", ["-Z1", archivePath], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    validateArchiveEntries(stdout.split("\n").filter(Boolean));
-    await execFileAsync("unzip", ["-q", archivePath, "-d", destination], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return;
-  }
-  if (/\.(tar\.gz|tgz|tar\.bz2|tbz2)$/i.test(fileName)) {
-    const { stdout } = await execFileAsync("tar", ["-tf", archivePath], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    validateArchiveEntries(stdout.split("\n").filter(Boolean));
-    await execFileAsync("tar", ["-xf", archivePath, "-C", destination], {
-      maxBuffer: 16 * 1024 * 1024,
-    });
-    return;
-  }
-  throw new Error(`Unsupported binary archive format: ${fileName}`);
+  connection.close();
+  if (child.exitCode === null && child.signalCode === null) child.kill();
+  await Promise.race([
+    new Promise<void>((resolveExit) => child.once("exit", () => resolveExit())),
+    new Promise<void>((resolveTimeout) => setTimeout(resolveTimeout, 1_000)),
+  ]);
 }
 
-async function installBinaryAgent(agent: RegistryAgent, target: RegistryBinaryTarget) {
-  const response = await fetch(target.archive, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Agent download returned HTTP ${response.status}.`);
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_ARCHIVE_BYTES) throw new Error("Agent archive is too large.");
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length > MAX_ARCHIVE_BYTES) throw new Error("Agent archive is too large.");
-  if (target.sha256) {
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    if (digest.toLowerCase() !== target.sha256.toLowerCase()) {
-      throw new Error("Agent archive checksum verification failed.");
-    }
-  }
+async function verifyAgentLaunch(
+  agent: RegistryAgent,
+  launch: AgentLaunch,
+): Promise<AgentCapabilities> {
+  const child = spawn(launch.command, launch.args, {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      ...(launch.command === process.execPath
+        ? { ELECTRON_RUN_AS_NODE: "1" }
+        : {}),
+      ...launch.env,
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-4_096);
+  });
 
-  const agentsRoot = join(/*turbopackIgnore: true*/ dataDirectory(), "agents");
-  const installRoot = join(
-    /*turbopackIgnore: true*/ agentsRoot,
-    agent.id,
-    agent.version,
+  const app = acp.client({ name: "MyAgents" });
+  const stream = acp.ndJsonStream(
+    Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+    Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
   );
-  const staging = await mkdtemp(
-    join(/*turbopackIgnore: true*/ tmpdir(), `myagents-${agent.id}-`),
-  );
+  const connection = app.connect(stream);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const fileName = new URL(target.archive).pathname.split("/").at(-1) || "agent";
-    const archivePath = join(/*turbopackIgnore: true*/ staging, fileName);
-    const extracted = join(/*turbopackIgnore: true*/ staging, "extracted");
-    mkdirSync(extracted, { recursive: true });
-    await writeFile(archivePath, bytes);
-    if (/\.(zip|tar\.gz|tgz|tar\.bz2|tbz2)$/i.test(fileName)) {
-      await extractBinaryArchive(archivePath, fileName, extracted);
-    } else {
-      const rawCommand = safeInstalledPath(extracted, target.cmd);
-      mkdirSync(dirname(rawCommand), { recursive: true });
-      await writeFile(rawCommand, bytes);
+    const initialize = await Promise.race([
+      connection.agent.request(acp.methods.agent.initialize, {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: {},
+        clientInfo: { name: "MyAgents", version: "0.1.0" },
+      }),
+      new Promise<never>((_resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => reject(new Error(
+          `${agent.name} exited before ACP initialization (${signal ?? code ?? "unknown"}).`,
+        )));
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${agent.name} ACP initialization timed out.`)),
+          20_000,
+        );
+      }),
+    ]);
+    if (initialize.protocolVersion !== acp.PROTOCOL_VERSION) {
+      throw new Error(
+        `${agent.name} negotiated unsupported ACP protocol version ${initialize.protocolVersion}.`,
+      );
     }
-
-    const stagedCommand = safeInstalledPath(extracted, target.cmd);
-    if (!existsSync(/*turbopackIgnore: true*/ stagedCommand)) {
-      throw new Error(`${agent.name} archive does not contain ${target.cmd}.`);
-    }
-    chmodSync(stagedCommand, 0o755);
-    mkdirSync(dirname(installRoot), { recursive: true });
-    await rm(installRoot, { recursive: true, force: true });
-    await rename(extracted, installRoot);
-    const command = safeInstalledPath(installRoot, target.cmd);
-    return { command, args: target.args ?? [], env: target.env ?? {} };
+    return capabilitiesFromInitialize(initialize);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const detail = stderr.trim();
+    throw new Error(
+      detail ? `${agent.name} could not start: ${message} (${detail})` :
+        `${agent.name} could not start: ${message}`,
+    );
   } finally {
-    await rm(staging, { recursive: true, force: true });
+    if (timer) clearTimeout(timer);
+    await stopProbe(child, connection);
   }
 }
 
@@ -434,31 +453,15 @@ export async function installRegistryAgent(registryId: string) {
   if (!agent) throw new Error("Agent was not found in the ACP Registry.");
 
   const existing = listAgentInstallations().find(
-    ({ registryId: installedRegistryId }) => installedRegistryId === registryId,
+    ({ enabled, registryId: installedRegistryId }) =>
+      enabled && installedRegistryId === registryId,
   );
   if (existing) return existing;
 
-  let launch: { command: string; args: string[]; env: Record<string, string> };
-  if (agent.distribution.npx) {
-    launch = await installNpxAgent(agent);
-  } else if (agent.distribution.uvx) {
-    const uvx = findCommand("uvx");
-    if (!uvx) throw new Error("This agent requires uvx, which is not installed.");
-    launch = {
-      command: uvx,
-      args: [agent.distribution.uvx.package, ...(agent.distribution.uvx.args ?? [])],
-      env: agent.distribution.uvx.env ?? {},
-    };
-  } else {
-    const platform = platformTarget();
-    const target = platform ? agent.distribution.binary?.[platform] : undefined;
-    if (!platform || !target) {
-      throw new Error(`${agent.name} has no distribution for this platform.`);
-    }
-    launch = await installBinaryAgent(agent, target);
-  }
+  const launch = resolveInstalledLaunch(agent);
+  const capabilities = await verifyAgentLaunch(agent, launch);
 
-  return upsertAgentInstallation({
+  const installed = upsertAgentInstallation({
     id: agent.id,
     registryId: agent.id,
     name: agent.name,
@@ -470,4 +473,6 @@ export async function installRegistryAgent(registryId: string) {
     env: launch.env,
     source: "registry",
   });
+  updateAgentHandshake(installed.id, capabilities);
+  return getAgentInstallation(installed.id)!;
 }

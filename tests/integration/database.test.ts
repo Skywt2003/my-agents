@@ -9,6 +9,8 @@ import {
   closeDatabase,
   createProject,
   databasePath,
+  deleteAgentInstallation,
+  getAgentInstallation,
   getPersistedSession,
   listPersistedSessions,
   listProjects,
@@ -63,6 +65,21 @@ describe("SQLite persistence", () => {
       "activities",
       "conversation_items",
     ]));
+    db.close();
+  });
+
+  it("keeps session history while disabling a removed Agent", () => {
+    persistSession(sessionFixture());
+
+    deleteAgentInstallation("fake-agent");
+
+    expect(getAgentInstallation("fake-agent")).toMatchObject({ enabled: false });
+    expect(getPersistedSession("session-1")).toMatchObject({
+      id: "session-1",
+      agentId: "fake-agent",
+    });
+    const db = new Database(databasePath(), { readonly: true });
+    expect(db.pragma("foreign_key_check")).toEqual([]);
     db.close();
   });
 

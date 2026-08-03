@@ -1,21 +1,53 @@
 import { spawn } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const origin = "http://127.0.0.1:3211";
 const token = "browser-e2e-token-0123456789abcdef";
 const dataDirectory = "/tmp/myagents-playwright-web-data";
+const registryPath = `${dataDirectory}/registry.json`;
 const tsxCli = resolve("node_modules/tsx/dist/cli.mjs");
 const playwrightCli = resolve("node_modules/@playwright/test/cli.js");
 
 await rm(dataDirectory, { recursive: true, force: true });
+await mkdir(dataDirectory, { recursive: true });
 await mkdir("/tmp/myagents-playwright-workspace", { recursive: true });
+await writeFile(
+  registryPath,
+  JSON.stringify({
+    agents: [
+      {
+        id: "local-fake-agent",
+        name: "Local Fake Agent",
+        version: "1.0.0",
+        description: "Installed ACP Agent used by the settings E2E test",
+        distribution: {
+          npx: {
+            package: "node",
+            args: [resolve("tests/fixtures/fake-acp-agent.mjs")],
+          },
+        },
+      },
+      {
+        id: "missing-agent",
+        name: "Missing Agent",
+        version: "1.0.0",
+        description: "Unavailable command used by the settings E2E test",
+        distribution: {
+          npx: { package: "myagents-definitely-missing-agent" },
+        },
+      },
+    ],
+  }),
+  "utf8",
+);
 
 const environment = {
   ...process.env,
   MYAGENTS_DATA_DIR: dataDirectory,
   MYAGENTS_DISABLE_DEFAULT_AGENTS: "1",
   MYAGENTS_TEST_AGENT_PATH: resolve("tests/fixtures/fake-acp-agent.mjs"),
+  MYAGENTS_REGISTRY_PATH: registryPath,
   FAKE_ACP_SESSION_NEW_DELAY_MS: "800",
   FAKE_ACP_SESSION_LOAD_DELAY_MS: "1000",
   FAKE_ACP_HISTORY_PATH: `${dataDirectory}/fake-acp-history.json`,

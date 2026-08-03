@@ -24,6 +24,8 @@ export type AgentDescriptor = {
   description?: string;
   command: string;
   args: string[];
+  displayCommand: string;
+  adapter?: string;
   source: AgentSource;
   enabled: boolean;
   available: boolean;

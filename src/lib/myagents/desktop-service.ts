@@ -14,6 +14,7 @@ import {
   reloadSession,
   resolvePermission,
   setSessionConfigOption,
+  shutdownAgentRuntime,
   shutdownRuntime,
   updateSessionTitlePreference,
   validateWorkingDirectory,
@@ -115,6 +116,7 @@ export function createDesktopService() {
         return listInstalledAgents();
       },
       async remove(id: string) {
+        shutdownAgentRuntime(id);
         await removeAgent(id);
         return listInstalledAgents();
       },

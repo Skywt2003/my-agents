@@ -553,11 +553,11 @@ export function updateAgentError(id: AgentId, error?: string) {
 }
 
 export function deleteAgentInstallation(id: AgentId) {
-  const session = getDatabase()
-    .prepare("SELECT 1 FROM sessions WHERE agent_id = ? LIMIT 1")
-    .get(id);
-  if (session) throw new Error("This agent still has sessions and cannot be removed.");
-  getDatabase().prepare("DELETE FROM agents WHERE id = ?").run(id);
+  getDatabase().prepare(`
+    UPDATE agents
+    SET enabled = 0, capabilities_json = NULL, last_error = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(new Date().toISOString(), id);
 }
 
 function toSummary(

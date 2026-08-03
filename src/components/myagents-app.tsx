@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
-  Download,
   FolderGit2,
   Info,
   LoaderCircle,
@@ -1161,6 +1160,10 @@ function AgentSettingsDialog({
   const [registryLoading, setRegistryLoading] = useState(false);
   const [registryError, setRegistryError] = useState<string | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [confirmingRemovalId, setConfirmingRemovalId] = useState<string | null>(
+    null,
+  );
   const registrySectionRef = useRef<HTMLElement>(null);
 
   function loadRegistry() {
@@ -1227,6 +1230,7 @@ function AgentSettingsDialog({
   }
 
   async function deleteAgent(id: string) {
+    setRemovingId(id);
     setRegistryError(null);
     try {
       const nextAgents = await window.myagents.agents.remove(id);
@@ -1236,8 +1240,11 @@ function AgentSettingsDialog({
           agent.id === id ? { ...agent, installed: false } : agent,
         ),
       );
+      setConfirmingRemovalId(null);
     } catch (error) {
       setRegistryError(getError(error));
+    } finally {
+      setRemovingId(null);
     }
   }
 
@@ -1266,15 +1273,72 @@ function AgentSettingsDialog({
                 <section>
                   <Label>Installed</Label>
                   <div className="mt-2 space-y-2">
+                    {agents.length === 0 && (
+                      <p className="rounded-lg border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">
+                        No Agents added yet.
+                      </p>
+                    )}
                     {agents.map((agent) => (
                       <div key={agent.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
                         <span className={cn("size-2 shrink-0 rounded-full", agent.available ? "bg-emerald-500" : "bg-destructive")} aria-label={agent.available ? "Available" : "Unavailable"} role="img" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-semibold">{agent.name}</p>
-                          <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{agent.command} {agent.args.join(" ")}</p>
+                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                            <p className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                              {agent.displayCommand}
+                            </p>
+                            {agent.adapter ? (
+                              <Badge
+                                variant="outline"
+                                className="h-4 px-1.5 font-mono text-[9px] font-normal text-muted-foreground"
+                                aria-label={`Adapter: ${agent.adapter}`}
+                              >
+                                {agent.adapter}
+                              </Badge>
+                            ) : null}
+                          </div>
                         </div>
                         {agent.capabilities && <span className="text-[10px] text-muted-foreground">{agent.capabilities.loadSession ? "load" : agent.capabilities.resumeSession ? "resume" : "new only"}{agent.capabilities.listSessions ? " · list" : ""}</span>}
-                        {agent.source === "registry" && <Button variant="ghost" size="icon-sm" onClick={() => void deleteAgent(agent.id)} aria-label={`Remove ${agent.name}`}><Trash2 /></Button>}
+                        {confirmingRemovalId === agent.id ? (
+                          <div
+                            className="flex shrink-0 items-center gap-1"
+                            role="group"
+                            aria-label={`Confirm removing ${agent.name}`}
+                          >
+                            <span className="mr-1 text-[10px] text-muted-foreground">
+                              Remove?
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={removingId !== null}
+                              onClick={() => setConfirmingRemovalId(null)}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={removingId !== null}
+                              onClick={() => void deleteAgent(agent.id)}
+                            >
+                              {removingId === agent.id && (
+                                <LoaderCircle className="animate-spin" />
+                              )}
+                              Remove
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            disabled={removingId !== null}
+                            onClick={() => setConfirmingRemovalId(agent.id)}
+                            aria-label={`Remove ${agent.name}`}
+                          >
+                            <Trash2 />
+                          </Button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1282,10 +1346,13 @@ function AgentSettingsDialog({
 
                 <section ref={registrySectionRef}>
                   <Label>Official ACP Registry</Label>
+                  <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
+                    Install an Agent yourself first. MyAgents verifies its command and ACP handshake before adding it.
+                  </p>
                   <div className="relative mt-2"><Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" /><Input value={registryQuery} onChange={(event) => { setRegistryQuery(event.target.value); setRegistryPage(0); }} placeholder="Search agents" className="pl-8" /></div>
-                  {registryLoading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading registry" /> : <><div className="mt-2 space-y-1.5">{visibleRegistry.map((agent) => <div key={agent.id} className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted/50"><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{agent.name} <span className="font-normal text-muted-foreground">{agent.version}</span></p><p className="truncate text-[10px] text-muted-foreground">{agent.description}</p></div><Button size="sm" variant="outline" disabled={agent.installed || installingId !== null} onClick={() => void installAgent(agent.id)}>{installingId === agent.id ? <LoaderCircle className="animate-spin" /> : <Download />}{agent.installed ? "Added" : "Install"}</Button></div>)}</div>{visibleRegistry.length === 0 && <p className="px-2 py-6 text-center text-xs text-muted-foreground">No agents found.</p>}<div className="mt-3 flex items-center justify-between border-t pt-3"><p className="text-[10px] text-muted-foreground">{filteredRegistry.length} agents · Page {registryPage + 1} of {registryPageCount}</p><div className="flex items-center gap-1"><Button type="button" variant="outline" size="icon-xs" aria-label="Previous registry page" disabled={registryPage === 0} onClick={() => changeRegistryPage(Math.max(0, registryPage - 1))}><ChevronLeft /></Button><Button type="button" variant="outline" size="icon-xs" aria-label="Next registry page" disabled={registryPage + 1 >= registryPageCount} onClick={() => changeRegistryPage(Math.min(registryPageCount - 1, registryPage + 1))}><ChevronRight /></Button></div></div></>}
+                  {registryLoading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading registry" /> : <><div className="mt-2 space-y-1.5">{visibleRegistry.map((agent) => <div key={agent.id} className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted/50"><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{agent.name} <span className="font-normal text-muted-foreground">{agent.version}</span></p><p className="truncate text-[10px] text-muted-foreground">{agent.description}</p></div><Button size="sm" variant="outline" disabled={agent.installed || installingId !== null} onClick={() => void installAgent(agent.id)}>{installingId === agent.id ? <LoaderCircle className="animate-spin" /> : agent.installed ? <Check /> : <Plus />}{agent.installed ? "Added" : installingId === agent.id ? "Verifying" : "Add"}</Button></div>)}</div>{visibleRegistry.length === 0 && <p className="px-2 py-6 text-center text-xs text-muted-foreground">No agents found.</p>}<div className="mt-3 flex items-center justify-between border-t pt-3"><p className="text-[10px] text-muted-foreground">{filteredRegistry.length} agents · Page {registryPage + 1} of {registryPageCount}</p><div className="flex items-center gap-1"><Button type="button" variant="outline" size="icon-xs" aria-label="Previous registry page" disabled={registryPage === 0} onClick={() => changeRegistryPage(Math.max(0, registryPage - 1))}><ChevronLeft /></Button><Button type="button" variant="outline" size="icon-xs" aria-label="Next registry page" disabled={registryPage + 1 >= registryPageCount} onClick={() => changeRegistryPage(Math.min(registryPageCount - 1, registryPage + 1))}><ChevronRight /></Button></div></div></>}
                 </section>
-                {registryError && <p className="text-xs leading-5 text-destructive">{registryError}</p>}
+                {registryError && <p role="alert" className="text-xs leading-5 text-destructive">{registryError}</p>}
               </div>
             </ScrollArea>
           </Tabs.Panel>

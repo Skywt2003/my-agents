@@ -15,7 +15,7 @@ export default defineConfig({
     },
     {
       name: "browser",
-      testMatch: /browser-debug\.spec\.ts/,
+      testMatch: /(agent-management|browser-debug)\.spec\.ts/,
       use: { ...devices["Desktop Chrome"] },
     },
   ],
