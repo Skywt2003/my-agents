@@ -16,12 +16,13 @@
 /test-results/
 /.playwright/
 
-# next.js
+# build output
 /.next/
 /.next-e2e/
 /out/
+/release/
 
-# production
+# legacy production output
 /build
 
 # local MyAgents data

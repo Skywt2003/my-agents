@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, SquareTerminal, Trash2, X } from "lucide-react";
 
@@ -50,7 +48,7 @@ export function TerminalPanel({
   useEffect(() => {
     const closeTerminals = () => {
       for (const id of terminalIdsRef.current) {
-        void fetch(`/api/terminals/${id}`, { method: "DELETE", keepalive: true });
+        void window.myagents.terminals.close(id);
       }
     };
     window.addEventListener("pagehide", closeTerminals);
@@ -61,25 +59,14 @@ export function TerminalPanel({
     setCreating(true);
     setError(null);
     try {
-      const response = await fetch("/api/terminals", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd, cols: 80, rows: 24 }),
-      });
-      const data = (await response.json()) as {
-        terminal?: TerminalInfo;
-        error?: string;
-      };
-      if (!response.ok || !data.terminal) {
-        throw new Error(data.error ?? "Could not create terminal.");
-      }
+      const terminal = await window.myagents.terminals.create(cwd, 80, 24);
       setSessions((current) => {
         const existing = current[sessionId] ?? emptySession();
         return {
           ...current,
           [sessionId]: {
-            tabs: [...existing.tabs, data.terminal!],
-            activeId: data.terminal!.id,
+            tabs: [...existing.tabs, terminal],
+            activeId: terminal.id,
           },
         };
       });
@@ -106,9 +93,10 @@ export function TerminalPanel({
         : existing.activeId;
       return { ...current, [sessionId]: { tabs, activeId } };
     });
-    const response = await fetch(`/api/terminals/${terminalId}`, { method: "DELETE" });
-    if (!response.ok && response.status !== 404) {
-      setError("Could not close terminal.");
+    try {
+      await window.myagents.terminals.close(terminalId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not close terminal.");
     }
   }, [sessionId]);
 
@@ -254,9 +242,9 @@ function TerminalView({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const controller = new AbortController();
     let disposed = false;
     let disposeTerminal = () => {};
+    let unsubscribe = () => {};
 
     void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]).then(
       async ([{ Terminal }, { FitAddon }]) => {
@@ -287,11 +275,7 @@ function TerminalView({
           input = "";
           if (!data) return;
           sendChain = sendChain.then(async () => {
-            await fetch(`/api/terminals/${terminalId}/input`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ data }),
-            });
+            await window.myagents.terminals.write(terminalId, data);
           });
         };
         const inputDisposable = terminal.onData((data) => {
@@ -305,11 +289,11 @@ function TerminalView({
           resizeTimer = setTimeout(() => {
             if (disposed || container.clientWidth === 0 || container.clientHeight === 0) return;
             fitAddon.fit();
-            void fetch(`/api/terminals/${terminalId}/resize`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ cols: terminal.cols, rows: terminal.rows }),
-            });
+            void window.myagents.terminals.resize(
+              terminalId,
+              terminal.cols,
+              terminal.rows,
+            );
           }, 40);
         };
         const observer = new ResizeObserver(resize);
@@ -323,42 +307,23 @@ function TerminalView({
           terminal.dispose();
         };
 
-        try {
-          const response = await fetch(`/api/terminals/${terminalId}/stream`, {
-            cache: "no-store",
-            signal: controller.signal,
-          });
-          if (!response.ok || !response.body) throw new Error("Terminal stream unavailable.");
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          for (;;) {
-            const { value, done } = await reader.read();
-            buffer += decoder.decode(value, { stream: !done });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const line of lines) {
-              if (!line.trim()) continue;
-              const event = JSON.parse(line) as TerminalStreamEvent;
-              if (event.type === "output") terminal.write(event.data);
-              else {
-                terminal.writeln(`\r\n[Process exited with code ${event.exitCode}]`);
-                onExit(terminalId, event.exitCode);
-              }
+        unsubscribe = window.myagents.terminals.subscribe(
+          terminalId,
+          (event: TerminalStreamEvent) => {
+            if (disposed) return;
+            if (event.type === "output") terminal.write(event.data);
+            else {
+              terminal.writeln(`\r\n[Process exited with code ${event.exitCode}]`);
+              onExit(terminalId, event.exitCode);
             }
-            if (done) break;
-          }
-        } catch (cause) {
-          if (!controller.signal.aborted) {
-            terminal.writeln(`\r\n[${cause instanceof Error ? cause.message : "Terminal disconnected."}]`);
-          }
-        }
+          },
+        );
       },
     );
 
     return () => {
       disposed = true;
-      controller.abort();
+      unsubscribe();
       disposeTerminal();
     };
   }, [onExit, terminalId]);

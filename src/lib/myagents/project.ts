@@ -1,5 +1,3 @@
-import "server-only";
-
 import { execFileSync } from "node:child_process";
 import { basename, dirname } from "node:path";
 

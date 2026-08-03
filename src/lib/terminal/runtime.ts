@@ -1,5 +1,3 @@
-import "server-only";
-
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
@@ -133,6 +131,14 @@ export function closeTerminal(id: string) {
   const runtime = requireTerminal(id);
   if (runtime.status === "running") runtime.process.kill();
   store.terminals.delete(id);
+}
+
+export function shutdownTerminals() {
+  for (const runtime of store.terminals.values()) {
+    if (runtime.status === "running") runtime.process.kill();
+    runtime.listeners.clear();
+  }
+  store.terminals.clear();
 }
 
 export function subscribeTerminal(id: string, listener: TerminalListener) {

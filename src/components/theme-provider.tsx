@@ -1,10 +1,91 @@
-"use client";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
-import { ThemeProvider as NextThemesProvider } from "next-themes";
+type Theme = "light" | "dark" | "system";
+
+type ThemeContextValue = {
+  theme: Theme;
+  setTheme(theme: Theme): void;
+};
+
+const THEME_STORAGE_KEY = "myagents-theme";
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+function storedTheme(defaultTheme: Theme): Theme {
+  const value = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return value === "light" || value === "dark" || value === "system"
+    ? value
+    : defaultTheme;
+}
+
+function applyTheme(theme: Theme) {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.classList.toggle(
+    "dark",
+    theme === "dark" || (theme === "system" && prefersDark),
+  );
+  document.documentElement.style.colorScheme =
+    theme === "system" ? "light dark" : theme;
+}
+
+export function initializeAppearance() {
+  try {
+    const font = window.localStorage.getItem("myagents-font");
+    if (font === "serif" || font === "sans") {
+      document.documentElement.dataset.font = font;
+    }
+    applyTheme(storedTheme("light"));
+  } catch {
+    applyTheme("light");
+  }
+}
 
 export function ThemeProvider({
   children,
-  ...props
-}: React.ComponentProps<typeof NextThemesProvider>) {
-  return <NextThemesProvider {...props}>{children}</NextThemesProvider>;
+  defaultTheme = "light",
+}: {
+  children: ReactNode;
+  defaultTheme?: Theme;
+}) {
+  const [theme, setThemeState] = useState<Theme>(() => {
+    try {
+      return storedTheme(defaultTheme);
+    } catch {
+      return defaultTheme;
+    }
+  });
+
+  useEffect(() => {
+    applyTheme(theme);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Keep the in-memory preference when local storage is unavailable.
+    }
+
+    if (theme !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => applyTheme("system");
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  }, [theme]);
+
+  const value = useMemo(
+    () => ({ theme, setTheme: setThemeState }),
+    [theme],
+  );
+
+  return <ThemeContext value={value}>{children}</ThemeContext>;
+}
+
+export function useTheme() {
+  const value = useContext(ThemeContext);
+  if (!value) throw new Error("useTheme must be used inside ThemeProvider.");
+  return value;
 }

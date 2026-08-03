@@ -2,8 +2,9 @@
 
 MyAgents is a minimal, local-first Agent Client Protocol (ACP) client. It can
 launch any local stdio ACP agent described by a command and arguments, rather
-than maintaining a fixed list of supported products. The runtime is structured
-so it can later move into an Electron main process.
+than maintaining a fixed list of supported products. Electron is the primary
+runtime; a development-only browser transport exposes the same local service
+for remote debugging.
 
 ## Features
 
@@ -24,24 +25,25 @@ so it can later move into an Electron main process.
 
 Requirements: Node.js 20.9 or newer and at least one local ACP agent.
 
+Install dependencies and launch the Electron application:
+
 ```bash
 npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), choose **New session**,
-select an agent, and enter an absolute workspace path. Use **Settings** to
-browse and install agents from the official ACP Registry.
+For remote browser debugging, run `npm run dev:web` (the legacy
+`npm run dev:remote` alias is also supported). The server listens only on
+`127.0.0.1:3200` by default. Its startup output contains the complete URL with
+a `#token=...` fragment. The fragment is removed from the address bar as soon
+as the browser stores it for the current tab.
 
-For development-only access through the local Caddy and Tailscale setup, run:
-
-```bash
-npm run dev:remote
-```
-
-This listens only on `127.0.0.1:3200`; Caddy exposes it at
-`https://my-agents.dev.skywt`. The production and future Electron runtimes do
-not use this port or remote entry point.
+Unless `MYAGENTS_WEB_TOKEN` is set, the server creates a stable token at
+`.myagents/browser-debug-token` with mode `0600`. Set `MYAGENTS_WEB_HOST`,
+`MYAGENTS_WEB_PORT`, `MYAGENTS_WEB_ORIGIN`, or
+`MYAGENTS_WEB_ALLOWED_ORIGINS` to override the browser server defaults. This
+transport is intended for trusted development access and is not included in
+the packaged Electron application.
 
 The initial installation detects these local commands when available:
 
@@ -72,20 +74,19 @@ stored below the same data directory.
 ## Architecture
 
 ```text
-Browser UI
-  -> Next.js route handlers (NDJSON streaming)
-    -> SQLite agent/session persistence + active session runtime
-      -> ACP TypeScript SDK (initialize, list/load/resume, prompt)
-        -> Configured ACP subprocess (stdio)
-          -> Agent sessions
+React renderer
+  -> Electron IPC (desktop) or authenticated WebSocket RPC (browser debug)
+    -> Shared desktop service
+      -> SQLite persistence + active session/terminal runtimes
+        -> ACP TypeScript SDK -> configured ACP subprocess (stdio)
 ```
 
 `src/lib/acp/agents.ts` owns Registry agent configuration and installation.
 `src/lib/acp/runtime.ts` owns the generic ACP lifecycle and makes
 decisions from capabilities returned by `initialize`; it does not branch on an
-agent's product name. The React UI only consumes the local HTTP contract. For
-Electron, this boundary can move to the main process while preserving the
-session and event types in `src/lib/myagents`.
+agent's product name. `src/lib/myagents/desktop-service.ts` owns the shared
+application operations. Electron IPC and the browser WebSocket server are thin
+transport adapters around that service.
 
 ## Adding agents
 
@@ -105,14 +106,15 @@ npm run typecheck
 npm run lint
 npm test
 npm run test:e2e
+npm run test:e2e:web
 npm run build
 ```
 
 The Vitest suite uses isolated temporary SQLite databases and a deterministic
-stdio ACP fixture. The Playwright migration guard builds the application into
-`.next-e2e`, starts it with its own data directory, and exercises session
-creation, streaming, model configuration, permissions, terminal I/O, and
-reload restoration without contacting a real Agent.
+stdio ACP fixture. The Playwright migration guards run the same core workflow
+through Electron IPC and the browser WebSocket transport: session creation,
+streaming, model configuration, permissions, terminal I/O, and reload
+restoration, all without contacting a real Agent.
 
 ## Limitations
 

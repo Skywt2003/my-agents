@@ -1,9 +1,6 @@
-"use client";
-
-import { useSyncExternalStore } from "react";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
 
+import { useTheme } from "@/components/theme-provider";
 import { cn } from "@/lib/utils";
 
 const themes = [
@@ -12,16 +9,8 @@ const themes = [
   { value: "system", label: "Follow system", icon: Monitor },
 ] as const;
 
-const subscribeToHydration = () => () => {};
-
 export function ThemeSettings() {
   const { theme, setTheme } = useTheme();
-  const hydrated = useSyncExternalStore(
-    subscribeToHydration,
-    () => true,
-    () => false,
-  );
-  const visibleTheme = hydrated ? theme : undefined;
 
   return (
     <div
@@ -30,7 +19,7 @@ export function ThemeSettings() {
       className="grid gap-3 sm:grid-cols-3"
     >
       {themes.map(({ value, label, icon: Icon }) => {
-        const selected = visibleTheme === value;
+        const selected = theme === value;
 
         return (
           <button

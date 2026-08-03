@@ -1,0 +1,23 @@
+appId: net.skywt.myagents
+productName: MyAgents
+electronDist: node_modules/electron/dist
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/node-pty/**/*
+linux:
+  category: Development
+  target:
+    - AppImage
+mac:
+  target:
+    - dmg
+win:
+  target:
+    - nsis
+npmRebuild: false

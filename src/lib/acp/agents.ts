@@ -1,5 +1,3 @@
-import "server-only";
-
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -45,7 +43,7 @@ function codexAdapterPath() {
   return (
     process.env.MYAGENTS_ACP_PATH ??
     join(
-      /*turbopackIgnore: true*/ process.cwd(),
+      process.env.MYAGENTS_APP_ROOT ?? process.cwd(),
       "node_modules",
       "@agentclientprotocol",
       "codex-acp",
