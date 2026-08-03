@@ -6,8 +6,6 @@ import type {
   TerminalStreamEvent,
 } from "@/lib/myagents/types";
 
-document.documentElement.dataset.platform = process.platform;
-
 let subscriptionSequence = 0;
 
 function nextSubscriptionId(prefix: string) {
@@ -17,6 +15,7 @@ function nextSubscriptionId(prefix: string) {
 
 const api: DesktopApi = {
   transport: "electron",
+  platform: process.platform,
   sessions: {
     list: (sync = false) => ipcRenderer.invoke("sessions:list", sync),
     get: (id) => ipcRenderer.invoke("sessions:get", id),

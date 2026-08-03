@@ -24,6 +24,12 @@ import type {
 } from "@/lib/myagents/types";
 
 const browserTokenFileName = "browser-debug-token";
+const browserEntryPlugin = {
+  name: "myagents-browser-entry",
+  transformIndexHtml(html) {
+    return html.replace("./main.tsx", "./browser-main.tsx");
+  },
+} satisfies Plugin;
 const healthEndpointPlugin = {
   name: "myagents-browser-health",
   configureServer(server) {
@@ -107,8 +113,9 @@ const service = createDesktopService();
 const vite = await createServer({
   configFile: false,
   root: resolve("src/renderer"),
-  plugins: [healthEndpointPlugin, react()],
+  plugins: [browserEntryPlugin, healthEndpointPlugin, react()],
   resolve: { alias: { "@": resolve("src") } },
+  define: { __MYAGENTS_BROWSER_DEBUG__: "true" },
   server: {
     host,
     port,

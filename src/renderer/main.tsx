@@ -9,12 +9,11 @@ import {
   initializeAppearance,
   ThemeProvider,
 } from "@/components/theme-provider";
-import { installBrowserApi } from "@/renderer/browser-api";
 
 import "./globals.css";
 
+document.documentElement.dataset.platform = window.myagents.platform;
 initializeAppearance();
-installBrowserApi();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Renderer root element is missing.");

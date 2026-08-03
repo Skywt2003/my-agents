@@ -22,6 +22,7 @@ export type RegistryAgentView = RegistryAgent & { installed: boolean };
 
 export type DesktopApi = {
   transport: "electron" | "browser";
+  platform: NodeJS.Platform | "browser";
   sessions: {
     list(sync?: boolean): Promise<SessionsSnapshot>;
     get(id: string): Promise<SessionSummary>;

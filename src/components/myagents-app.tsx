@@ -109,8 +109,8 @@ const MODEL_OPTIONS_CACHE_MAX_ENTRIES = 50;
 const REGISTRY_PAGE_SIZE = 10;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 480;
-const SIDEBAR_COLLAPSED_WIDTH =
-  document.documentElement.dataset.platform === "darwin" ? 80 : 48;
+const SIDEBAR_COLLAPSED_WIDTH = 48;
+const MACOS_SIDEBAR_COLLAPSED_WIDTH = 80;
 const SIDEBAR_HORIZONTAL_PADDING = 24;
 const TERMINAL_MIN_HEIGHT = 180;
 const TERMINAL_MAX_HEIGHT = 720;
@@ -815,7 +815,7 @@ export function MyAgentsApp() {
     <main
       className="macos-window-surface grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background transition-[grid-template-columns] duration-200"
       style={{
-        gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px minmax(0, 1fr)`,
+        gridTemplateColumns: `${sidebarCollapsed ? window.myagents.platform === "darwin" ? MACOS_SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px minmax(0, 1fr)`,
       }}
     >
       <aside
@@ -823,14 +823,14 @@ export function MyAgentsApp() {
         className="macos-sidebar-surface relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-sidebar"
       >
         <div className={cn(
-          "macos-titlebar-drag-region flex h-12 shrink-0 items-center gap-2",
+          "macos-titlebar-drag-region macos-window-drag-region flex h-12 shrink-0 items-center gap-2",
           sidebarCollapsed && "macos-titlebar-drag-region-collapsed",
           sidebarCollapsed ? "justify-center px-2" : "px-5",
         )}>
           {!sidebarCollapsed ? (
             <>
               <p className="min-w-0 flex-1 truncate text-sm font-semibold">MyAgents</p>
-              {window.myagents.transport === "browser" ? (
+              {__MYAGENTS_BROWSER_DEBUG__ ? (
                 <Badge variant="outline" className="shrink-0 text-[9px] uppercase tracking-wide">
                   Browser debug
                 </Badge>
@@ -1006,7 +1006,7 @@ export function MyAgentsApp() {
             </div>
           </div>
         ) : selected ? <>
-          <header className="flex h-12 shrink-0 items-center justify-between border-b px-6"><div className="flex min-w-0 items-center gap-2"><h1 className="min-w-0 truncate text-sm font-semibold">{selected.title}</h1><SessionDetailsDialog session={selected} onSessionChanged={(session) => patchSession(session.id, () => session)} /><AgentIcon session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></header>
+          <header className="macos-window-drag-region flex h-12 shrink-0 items-center justify-between border-b px-6"><div className="flex min-w-0 items-center gap-2"><h1 className="min-w-0 truncate text-sm font-semibold">{selected.title}</h1><SessionDetailsDialog session={selected} onSessionChanged={(session) => patchSession(session.id, () => session)} /><AgentIcon session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></header>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
               <ScrollArea ref={conversationRef} data-slot="conversation-scroll-area" className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8"><div className="space-y-7"><ConversationTimeline session={selected} onResolvePermission={resolvePermission} />{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div></div></ScrollArea>

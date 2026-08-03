@@ -168,14 +168,23 @@ html[data-platform="darwin"] .macos-content-surface {
   background-color: var(--background);
 }
 
-html[data-platform="darwin"] .macos-titlebar-drag-region {
+html[data-platform="darwin"] .macos-window-drag-region {
+  -webkit-app-region: drag;
   app-region: drag;
+}
+
+html[data-platform="darwin"] .macos-titlebar-drag-region {
   padding-left: 82px;
 }
 
-html[data-platform="darwin"] .macos-titlebar-drag-region button,
-html[data-platform="darwin"] .macos-titlebar-drag-region a,
-html[data-platform="darwin"] .macos-titlebar-drag-region input {
+html[data-platform="darwin"] .macos-window-drag-region button,
+html[data-platform="darwin"] .macos-window-drag-region a,
+html[data-platform="darwin"] .macos-window-drag-region input,
+html[data-platform="darwin"] .macos-window-drag-region textarea,
+html[data-platform="darwin"] .macos-window-drag-region select,
+html[data-platform="darwin"] .macos-window-drag-region [role="button"],
+html[data-platform="darwin"] .macos-window-drag-region [contenteditable="true"] {
+  -webkit-app-region: no-drag;
   app-region: no-drag;
 }
 

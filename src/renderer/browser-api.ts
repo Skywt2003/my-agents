@@ -142,6 +142,7 @@ async function request<Result>(
 
 const browserApi: DesktopApi = {
   transport: "browser",
+  platform: "browser",
   sessions: {
     list: (sync = false) => request("sessions.list", [sync]),
     get: (id) => request("sessions.get", [id]),

@@ -16,5 +16,6 @@ export default defineConfig({
   renderer: {
     plugins: [react()],
     resolve: { alias: { "@": sourceRoot } },
+    define: { __MYAGENTS_BROWSER_DEBUG__: "false" },
   },
 });
