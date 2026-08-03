@@ -1,55 +1,34 @@
-import { expect, test } from "@playwright/test";
+import { mkdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
+import { expect, test, _electron as electron } from "@playwright/test";
 
-test("preserves the core desktop workflow", async ({ page }) => {
-  await page.goto("/");
-  await expect(
-    page.getByRole("heading", { name: "Start a new session" }),
-  ).toBeVisible();
+import { exerciseCoreWorkflow } from "./core-workflow";
 
-  await page.getByRole("button", { name: "Add project" }).first().click();
-  const projectDialog = page.getByRole("dialog", { name: "Add project" });
-  await projectDialog.getByLabel("Project name").fill("Playwright project");
-  await projectDialog
-    .getByLabel("Directory")
-    .fill("/tmp/myagents-playwright-workspace");
-  await projectDialog.getByRole("button", { name: "Add project" }).click();
+const testDataDirectory = "/tmp/myagents-playwright-data";
+const testWorkspace = "/tmp/myagents-playwright-workspace";
 
-  await page
-    .getByPlaceholder("What would you like to work on?")
-    .fill("hello migration guard");
-  await page
-    .getByRole("button", { name: "Start session and send message" })
-    .click();
-  await expect(page.getByText("Hello from fake agent")).toBeVisible();
-  await expect(page.getByText("1 tool call")).toBeVisible();
+test("preserves the core Electron workflow", async () => {
+  await rm(testDataDirectory, { recursive: true, force: true });
+  await mkdir(testWorkspace, { recursive: true });
+  const executablePath = process.env.MYAGENTS_E2E_EXECUTABLE;
+  const electronApp = await electron.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: executablePath ? ["--no-sandbox"] : ["--no-sandbox", "."],
+    env: {
+      ...process.env,
+      MYAGENTS_DATA_DIR: testDataDirectory,
+      MYAGENTS_DISABLE_DEFAULT_AGENTS: "1",
+      MYAGENTS_TEST_AGENT_PATH: resolve("tests/fixtures/fake-acp-agent.mjs"),
+    },
+  });
+  const page = await electronApp.firstWindow();
 
-  const model = page.getByRole("combobox", { name: "Model" });
-  await model.click();
-  await page.getByRole("option", { name: "Accurate" }).click();
-  await expect(model).toContainText("Accurate");
-
-  await page.getByPlaceholder("Message Fake Agent…").fill("request permission");
-  await page.getByRole("button", { name: "Send message" }).click();
-  await page.getByText("Permission required").click();
-  await page.getByRole("button", { name: "Allow", exact: true }).click();
-  await expect(page.getByText(/permission-allow/)).toBeVisible();
-
-  await page.getByRole("button", { name: "Toggle terminal panel" }).click();
-  await page.getByRole("button", { name: "New terminal" }).click();
-  const terminalInput = page.locator(".xterm-helper-textarea");
-  await expect(terminalInput).toBeAttached();
-  await terminalInput.pressSequentially("printf MYAGENTS_TERMINAL_OK");
-  await terminalInput.press("Enter");
-  await expect(page.locator(".xterm-rows")).toContainText(
-    "MYAGENTS_TERMINAL_OK",
-  );
-
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "hello migration guard" }),
-  ).toBeVisible();
-  await expect(page.getByText(/permission-allow/)).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Model" })).toContainText(
-    "Accurate",
-  );
+  try {
+    await expect(
+      page.evaluate(() => window.myagents.transport),
+    ).resolves.toBe("electron");
+    await exerciseCoreWorkflow(page);
+  } finally {
+    await electronApp.close();
+  }
 });

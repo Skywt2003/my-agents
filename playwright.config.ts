@@ -7,23 +7,16 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 8_000 },
   reporter: [["list"]],
-  use: {
-    baseURL: "http://127.0.0.1:3210",
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
-  },
+  use: { trace: "retain-on-failure", screenshot: "only-on-failure" },
   projects: [
     {
-      name: "chromium",
+      name: "electron",
+      testMatch: /migration-guard\.spec\.ts/,
+    },
+    {
+      name: "browser",
+      testMatch: /browser-debug\.spec\.ts/,
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "node tests/e2e/start-web-app.mjs",
-    url: "http://127.0.0.1:3210",
-    reuseExistingServer: false,
-    timeout: 180_000,
-    stdout: "pipe",
-    stderr: "pipe",
-  },
 });

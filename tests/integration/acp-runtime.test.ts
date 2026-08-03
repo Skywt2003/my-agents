@@ -11,6 +11,7 @@ import {
   createSession,
   listSessions,
   promptSession,
+  reloadSession,
   resolvePermission,
   setSessionConfigOption,
   shutdownRuntime,
@@ -54,6 +55,15 @@ async function waitForEvent(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out waiting for fake ACP event.");
+}
+
+async function waitForLogMethod(method: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if ((await readLog()).some((entry) => entry.method === method)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${method}.`);
 }
 
 beforeEach(async () => {
@@ -119,6 +129,9 @@ describe("ACP runtime with a deterministic stdio agent", () => {
       ],
       activities: [expect.objectContaining({ id: "tool-1", status: "completed" })],
     });
+    expect(
+      getPersistedSession(session.id)?.conversation.map((item) => item.type),
+    ).toEqual(["message", "tool", "message"]);
 
     const configured = await setSessionConfigOption(session.id, "model", "accurate");
     expect(configured.configOptions[0]).toMatchObject({ currentValue: "accurate" });
@@ -135,6 +148,123 @@ describe("ACP runtime with a deterministic stdio agent", () => {
         "session/close",
       ]),
     );
+  });
+
+  it("keeps a prepared session as a draft until its first prompt", async () => {
+    const draft = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+      { persist: false },
+    );
+
+    expect(getPersistedSession(draft.id)).toBeNull();
+    expect((await listSessions()).sessions).not.toContainEqual(
+      expect.objectContaining({ id: draft.id }),
+    );
+
+    await setSessionConfigOption(draft.id, "model", "accurate");
+    expect(getPersistedSession(draft.id)).toBeNull();
+
+    await promptSession(draft.id, "start the session");
+    expect(getPersistedSession(draft.id)).toMatchObject({
+      id: draft.id,
+      title: "start the session",
+    });
+    expect(
+      (await listSessions()).sessions.find(({ id }) => id === draft.id)?.configOptions,
+    ).toEqual([expect.objectContaining({ currentValue: "accurate" })]);
+  });
+
+  it("keeps an unpersisted draft active when the selected-session view reloads", async () => {
+    const draft = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+      { persist: false },
+    );
+
+    await expect(reloadSession(draft.id)).resolves.toMatchObject({
+      id: draft.id,
+      status: "ready",
+    });
+    await expect(promptSession(draft.id, "first message")).resolves.toBeUndefined();
+    expect(getPersistedSession(draft.id)).toMatchObject({
+      id: draft.id,
+      title: "first message",
+    });
+  });
+
+  it("reloads an idle active session and replaces it with ordered agent history", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [fixturePath],
+      env: { FAKE_ACP_LOG: logPath, FAKE_ACP_SCENARIO: "load-history" },
+      source: "system",
+    });
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+    );
+
+    const reloaded = await reloadSession(session.id);
+
+    expect(reloaded.conversation.map((item) => item.type)).toEqual([
+      "message",
+      "tool",
+      "message",
+    ]);
+    expect(reloaded.activities).toEqual([
+      expect.objectContaining({ id: "loaded-tool", status: "completed" }),
+    ]);
+    expect(getPersistedSession(session.id)?.conversation).toMatchObject([
+      { type: "message", message: { content: "Loaded question" } },
+      { type: "tool", activity: { id: "loaded-tool" } },
+      { type: "message", message: { content: "Loaded answer" } },
+    ]);
+    expect((await readLog()).map(({ method }) => method)).toContain("session/load");
+  });
+
+  it("keeps persisted conversation content visible while session history reloads", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [fixturePath],
+      env: {
+        FAKE_ACP_LOG: logPath,
+        FAKE_ACP_SCENARIO: "load-history",
+        FAKE_ACP_SESSION_LOAD_DELAY_MS: "200",
+      },
+      source: "system",
+    });
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+    );
+    await promptSession(session.id, "Cached question");
+
+    const reload = reloadSession(session.id);
+    await waitForLogMethod("session/load");
+    const loadingSnapshot = (await listSessions()).sessions.find(
+      ({ id }) => id === session.id,
+    );
+
+    expect(loadingSnapshot).toMatchObject({ status: "connecting" });
+    expect(loadingSnapshot?.conversation).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ content: "Cached question" }),
+        }),
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ content: "Hello from fake agent" }),
+        }),
+      ]),
+    );
+
+    await expect(reload).resolves.toMatchObject({ status: "ready" });
   });
 
   it("round-trips selected and cancelled permission outcomes", async () => {

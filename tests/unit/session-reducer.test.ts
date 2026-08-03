@@ -19,6 +19,12 @@ describe("applySessionEvent", () => {
     expect(second.messages).toMatchObject([
       { id: "assistant-1", role: "assistant", content: "Hello world" },
     ]);
+    expect(second.conversation).toMatchObject([
+      {
+        type: "message",
+        message: { id: "assistant-1", content: "Hello world" },
+      },
+    ]);
   });
 
   it("updates an existing tool activity without changing its position", () => {
@@ -26,6 +32,16 @@ describe("applySessionEvent", () => {
       activities: [
         { id: "tool-1", title: "Read", kind: "read", status: "in_progress" },
         { id: "tool-2", title: "Search", kind: "search", status: "pending" },
+      ],
+      conversation: [
+        {
+          type: "tool",
+          activity: { id: "tool-1", title: "Read", kind: "read", status: "in_progress" },
+        },
+        {
+          type: "tool",
+          activity: { id: "tool-2", title: "Search", kind: "search", status: "pending" },
+        },
       ],
     });
     const updated = applySessionEvent(session, {
@@ -42,6 +58,52 @@ describe("applySessionEvent", () => {
     expect(updated.activities[0]).toMatchObject({
       title: "Read file",
       status: "completed",
+    });
+    expect(updated.conversation.map((item) =>
+      item.type === "tool" ? item.activity.id : item.type
+    )).toEqual(["tool-1", "tool-2"]);
+    expect(updated.conversation[0]).toMatchObject({
+      activity: { title: "Read file", status: "completed" },
+    });
+  });
+
+  it("keeps tool calls between the messages that surrounded them", () => {
+    const beforeTool = applySessionEvent(sessionFixture(), {
+      type: "assistant_delta",
+      messageId: "assistant-1",
+      text: "I will inspect this.",
+    });
+    const withTool = applySessionEvent(beforeTool, {
+      type: "tool",
+      activity: {
+        id: "tool-1",
+        title: "Read file",
+        kind: "read",
+        status: "in_progress",
+      },
+    });
+    const afterTool = applySessionEvent(withTool, {
+      type: "assistant_delta",
+      messageId: "assistant-2",
+      text: "The file confirms it.",
+    });
+    const completed = applySessionEvent(afterTool, {
+      type: "tool",
+      activity: {
+        id: "tool-1",
+        title: "Read file",
+        kind: "read",
+        status: "completed",
+      },
+    });
+
+    expect(completed.conversation.map((item) => item.type)).toEqual([
+      "message",
+      "tool",
+      "message",
+    ]);
+    expect(completed.conversation[1]).toMatchObject({
+      activity: { id: "tool-1", status: "completed" },
     });
   });
 
@@ -68,6 +130,10 @@ describe("applySessionEvent", () => {
     expect(replaced.pendingPermissions).toHaveLength(1);
     expect(replaced.pendingPermissions[0].title).toBe("Run safe command");
     expect(resolved.pendingPermissions).toEqual([]);
+    expect(replaced.conversation).toMatchObject([
+      { type: "permission", permission: { id: "permission-1" } },
+    ]);
+    expect(resolved.conversation).toEqual([]);
   });
 
   it("applies status, configuration, and error events", () => {

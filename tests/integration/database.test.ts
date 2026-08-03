@@ -13,6 +13,7 @@ import {
   listPersistedSessions,
   listProjects,
   persistActivity,
+  persistConversationItem,
   persistMessage,
   persistSession,
   reconcileDiscoveredSessions,
@@ -54,7 +55,14 @@ describe("SQLite persistence", () => {
       (db
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
         .all() as Array<{ name: string }>).map(({ name }) => name),
-    ).toEqual(expect.arrayContaining(["agents", "projects", "sessions", "messages", "activities"]));
+    ).toEqual(expect.arrayContaining([
+      "agents",
+      "projects",
+      "sessions",
+      "messages",
+      "activities",
+      "conversation_items",
+    ]));
     db.close();
   });
 
@@ -68,6 +76,19 @@ describe("SQLite persistence", () => {
         role: "user",
         content: "Hello",
         createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      0,
+    );
+    persistConversationItem(
+      session.id,
+      {
+        type: "message",
+        message: {
+          id: "user-1",
+          role: "user",
+          content: "Hello",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        },
       },
       0,
     );
@@ -86,6 +107,32 @@ describe("SQLite persistence", () => {
       { id: "tool-1", title: "Read", kind: "read", status: "completed" },
       0,
     );
+    persistConversationItem(
+      session.id,
+      {
+        type: "tool",
+        activity: {
+          id: "tool-1",
+          title: "Read",
+          kind: "read",
+          status: "completed",
+        },
+      },
+      1,
+    );
+    persistConversationItem(
+      session.id,
+      {
+        type: "message",
+        message: {
+          id: "assistant-1",
+          role: "assistant",
+          content: "Hi",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        },
+      },
+      2,
+    );
     closeDatabase();
 
     const restored = getPersistedSession(session.id);
@@ -93,7 +140,37 @@ describe("SQLite persistence", () => {
     expect(restored?.activities).toEqual([
       { id: "tool-1", title: "Read", kind: "read", status: "completed" },
     ]);
+    expect(restored?.conversation.map((item) => item.type)).toEqual([
+      "message",
+      "tool",
+      "message",
+    ]);
     expect(restored?.project.path).toBe(session.cwd);
+  });
+
+  it("backfills a stable fallback timeline for databases without global order", () => {
+    const session = sessionFixture();
+    persistSession(session);
+    persistMessage(
+      session.id,
+      {
+        id: "message-1",
+        role: "assistant",
+        content: "Existing message",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      0,
+    );
+    persistActivity(
+      session.id,
+      { id: "tool-1", title: "Existing tool", kind: "read", status: "completed" },
+      0,
+    );
+    closeDatabase();
+
+    expect(
+      getPersistedSession(session.id)?.conversation.map((item) => item.type),
+    ).toEqual(["message", "tool"]);
   });
 
   it("preserves custom session titles across database restarts", () => {
