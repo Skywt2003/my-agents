@@ -110,6 +110,17 @@ npm run test:e2e:web
 npm run build
 ```
 
+## Continuous desktop builds
+
+Every push to `main` runs the verification suite and packages unsigned desktop
+builds for Linux x64, Windows x64, macOS Apple Silicon, and macOS Intel. Once
+all four packages succeed, the workflow replaces the rolling
+[`continuous` pre-release](https://github.com/Skywt2003/my-agents/releases/tag/continuous)
+and publishes a SHA-256 checksum file alongside the installers.
+
+These builds are intended for testing. macOS Gatekeeper and Windows SmartScreen
+may warn until code-signing and notarization credentials are configured.
+
 The Vitest suite uses isolated temporary SQLite databases and a deterministic
 stdio ACP fixture. The Playwright migration guards run the same core workflow
 through Electron IPC and the browser WebSocket transport: session creation,

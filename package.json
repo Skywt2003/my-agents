@@ -10,7 +10,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "dist": "npm run build && electron-builder",
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "install-electron && electron-builder install-app-deps",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

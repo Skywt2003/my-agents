@@ -1,0 +1,151 @@
+name: Continuous desktop release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: continuous-desktop-release
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Use HTTPS for public GitHub dependencies
+        shell: bash
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+  package:
+    name: Package ${{ matrix.artifact }}
+    needs: verify
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: linux-x64
+            os: ubuntu-latest
+            builder_args: --linux AppImage --x64
+          - artifact: windows-x64
+            os: windows-latest
+            builder_args: --win nsis --x64
+          - artifact: macos-arm64
+            os: macos-latest
+            builder_args: --mac dmg --arm64
+          - artifact: macos-x64
+            os: macos-15-intel
+            builder_args: --mac dmg --x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Use HTTPS for public GitHub dependencies
+        shell: bash
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Package application
+        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.artifact }}
+          path: |
+            release/*.AppImage
+            release/*.dmg
+            release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish continuous release
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v7
+        with:
+          pattern: desktop-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        working-directory: artifacts
+        run: find . -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+
+      - name: Replace continuous pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short_sha="${GITHUB_SHA:0:7}"
+          notes_file="${RUNNER_TEMP}/continuous-release-notes.md"
+          {
+            echo "Automated unsigned desktop builds from main at commit ${GITHUB_SHA}."
+            echo
+            echo "- Linux x64: AppImage"
+            echo "- Windows x64: NSIS installer"
+            echo "- macOS: Apple Silicon and Intel DMG"
+            echo
+            echo "These continuous builds are intended for testing. macOS Gatekeeper and Windows SmartScreen may warn because the packages are not code-signed."
+          } > "${notes_file}"
+
+          if gh release view continuous --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release delete continuous --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes
+          fi
+
+          gh release create continuous artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "MyAgents Continuous (${short_sha})" \
+            --notes-file "${notes_file}" \
+            --prerelease
