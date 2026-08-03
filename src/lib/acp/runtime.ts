@@ -58,6 +58,17 @@ type PendingPermission = {
   resolve: (response: RequestPermissionResponse) => void;
 };
 
+type LegacySessionModel = {
+  modelId: string;
+  name: string;
+  description?: string | null;
+};
+
+type LegacySessionModelState = {
+  currentModelId: string;
+  availableModels: LegacySessionModel[];
+};
+
 type SessionRuntime = {
   id: string;
   acpSessionId: string;
@@ -77,6 +88,7 @@ type SessionRuntime = {
   activities: Map<string, ToolActivity>;
   conversation: ConversationItem[];
   configOptions: SessionConfigOption[];
+  legacyModels?: LegacySessionModelState;
   permissions: Map<string, PendingPermission>;
   listeners: Set<Listener>;
   process: ChildProcessWithoutNullStreams;
@@ -285,17 +297,38 @@ function handleToolUpdate(runtime: SessionRuntime, update: SessionUpdate) {
   publish(runtime, { type: "tool", activity });
 }
 
+function messageIdForChunk(
+  runtime: SessionRuntime,
+  role: ChatMessage["role"],
+  messageId: string | null | undefined,
+) {
+  if (messageId != null) return messageId;
+
+  const previousMessage = runtime.messages.at(-1);
+  return previousMessage?.role === role
+    ? previousMessage.id
+    : `${role}-${runtime.messages.length}`;
+}
+
 function handleSessionUpdate(runtime: SessionRuntime, update: SessionUpdate) {
   switch (update.sessionUpdate) {
     case "user_message_chunk": {
       if (!runtime.hydrating || update.content.type !== "text") return;
-      const messageId = update.messageId ?? `user-${runtime.messages.length}`;
+      const messageId = messageIdForChunk(
+        runtime,
+        "user",
+        update.messageId,
+      );
       upsertMessage(runtime, "user", messageId, update.content.text);
       return;
     }
     case "agent_message_chunk": {
       if (update.content.type !== "text") return;
-      const messageId = update.messageId ?? `assistant-${runtime.messages.length}`;
+      const messageId = messageIdForChunk(
+        runtime,
+        "assistant",
+        update.messageId,
+      );
       upsertMessage(runtime, "assistant", messageId, update.content.text);
       publish(runtime, {
         type: "assistant_delta",
@@ -330,6 +363,7 @@ function handleSessionUpdate(runtime: SessionRuntime, update: SessionUpdate) {
       persistRuntime(runtime);
       return;
     case "config_option_update":
+      runtime.legacyModels = undefined;
       runtime.configOptions = update.configOptions;
       publish(runtime, {
         type: "config_options",
@@ -339,6 +373,72 @@ function handleSessionUpdate(runtime: SessionRuntime, update: SessionUpdate) {
     default:
       return;
   }
+}
+
+function legacyModelsFromResponse(response: unknown): LegacySessionModelState | undefined {
+  if (!response || typeof response !== "object" || !("models" in response)) {
+    return undefined;
+  }
+  const models = response.models;
+  if (!models || typeof models !== "object") return undefined;
+
+  const currentModelId = "currentModelId" in models
+    ? models.currentModelId
+    : undefined;
+  const availableModels = "availableModels" in models
+    ? models.availableModels
+    : undefined;
+  if (typeof currentModelId !== "string" || !Array.isArray(availableModels)) {
+    return undefined;
+  }
+
+  const normalized = availableModels.flatMap((model) => {
+    if (!model || typeof model !== "object") return [];
+    const modelId = "modelId" in model ? model.modelId : undefined;
+    const name = "name" in model ? model.name : undefined;
+    const description = "description" in model ? model.description : undefined;
+    if (typeof modelId !== "string" || typeof name !== "string") return [];
+    return [{
+      modelId,
+      name,
+      ...(typeof description === "string" ? { description } : {}),
+    }];
+  });
+  if (!normalized.some(({ modelId }) => modelId === currentModelId)) {
+    return undefined;
+  }
+  return { currentModelId, availableModels: normalized };
+}
+
+function legacyModelConfigOption(models: LegacySessionModelState): SessionConfigOption {
+  return {
+    id: "model",
+    name: "Model",
+    category: "model",
+    type: "select",
+    currentValue: models.currentModelId,
+    options: models.availableModels.map(({ modelId, name, description }) => ({
+      value: modelId,
+      name,
+      ...(description ? { description } : {}),
+    })),
+  };
+}
+
+function sessionConfigFromResponse(response: unknown) {
+  const configOptions = response && typeof response === "object" &&
+      "configOptions" in response && Array.isArray(response.configOptions)
+    ? response.configOptions as SessionConfigOption[]
+    : [];
+  if (configOptions.length > 0) {
+    return { configOptions, legacyModels: undefined };
+  }
+
+  const legacyModels = legacyModelsFromResponse(response);
+  return {
+    configOptions: legacyModels ? [legacyModelConfigOption(legacyModels)] : configOptions,
+    legacyModels,
+  };
 }
 
 function processError(error: unknown) {
@@ -491,6 +591,7 @@ export async function createSession(
       `${agent.name} session creation`,
       60_000,
     );
+    const sessionConfig = sessionConfigFromResponse(response);
     runtime = {
       id,
       acpSessionId: response.sessionId,
@@ -509,7 +610,8 @@ export async function createSession(
       messages: [],
       activities: new Map(),
       conversation: [],
-      configOptions: response.configOptions ?? [],
+      configOptions: sessionConfig.configOptions,
+      legacyModels: sessionConfig.legacyModels,
       permissions: new Map(),
       listeners: new Set(),
       process: opened.process,
@@ -606,7 +708,9 @@ async function activatePersistedSession(id: string) {
           cwd: saved.cwd,
           mcpServers: [],
         });
-      runtime.configOptions = response.configOptions ?? [];
+      const sessionConfig = sessionConfigFromResponse(response);
+      runtime.configOptions = sessionConfig.configOptions;
+      runtime.legacyModels = sessionConfig.legacyModels;
       runtime.hydrating = false;
       runtime.status = "ready";
       runtime.error = undefined;
@@ -739,19 +843,7 @@ export async function getSession(id: string) {
 
 export async function reloadSession(id: string) {
   const active = store.sessions.get(id);
-  if (
-    active &&
-    !active.connection.signal.aborted &&
-    !active.persisted
-  ) {
-    return serialize(active);
-  }
-  if (
-    active &&
-    !active.connection.signal.aborted &&
-    (active.status === "running" ||
-      active.status === "connecting")
-  ) {
+  if (active && !active.connection.signal.aborted) {
     return serialize(active);
   }
   if (active) {
@@ -809,34 +901,36 @@ export async function prepareSession(id: string) {
   await activatePersistedSession(id);
 }
 
-export async function promptSession(id: string, text: string) {
+export async function promptSession(id: string, text: string, listener?: Listener) {
   const runtime = await activatePersistedSession(id);
   if (runtime.status === "running") {
     throw new Error("Session is already running.");
   }
 
-  const userMessage: ChatMessage = {
-    id: randomUUID(),
-    role: "user",
-    content: text,
-    createdAt: new Date().toISOString(),
-  };
-  if (!runtime.persisted) persistRuntime(runtime);
-  runtime.messages.push(userMessage);
-  const userItem: ConversationItem = { type: "message", message: userMessage };
-  runtime.conversation.push(userItem);
-  persistConversationMessage(
-    runtime.id,
-    userMessage,
-    runtime.messages.length - 1,
-    runtime.conversation.length - 1,
-  );
-  if (runtime.title === "New session") {
-    runtime.title = text.length > 38 ? `${text.slice(0, 38).trim()}…` : text;
-  }
-  setStatus(runtime, "running");
+  if (listener) runtime.listeners.add(listener);
 
   try {
+    const userMessage: ChatMessage = {
+      id: randomUUID(),
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+    if (!runtime.persisted) persistRuntime(runtime);
+    runtime.messages.push(userMessage);
+    const userItem: ConversationItem = { type: "message", message: userMessage };
+    runtime.conversation.push(userItem);
+    persistConversationMessage(
+      runtime.id,
+      userMessage,
+      runtime.messages.length - 1,
+      runtime.conversation.length - 1,
+    );
+    if (runtime.title === "New session") {
+      runtime.title = text.length > 38 ? `${text.slice(0, 38).trim()}…` : text;
+    }
+    setStatus(runtime, "running");
+
     const response = await runtime.connection.agent.request(
       acp.methods.agent.session.prompt,
       {
@@ -852,6 +946,8 @@ export async function promptSession(id: string, text: string) {
     setStatus(runtime, "error");
     publish(runtime, { type: "error", message });
     throw error;
+  } finally {
+    if (listener) runtime.listeners.delete(listener);
   }
 }
 
@@ -874,6 +970,27 @@ export async function setSessionConfigOption(
   }
   if (option.type === "select" && typeof value !== "string") {
     throw new Error("This session configuration option requires a selected value.");
+  }
+
+  if (
+    runtime.legacyModels &&
+    option.id === "model" &&
+    typeof value === "string"
+  ) {
+    const response = await runtime.connection.agent.request(
+      "session/set_model",
+      { sessionId: runtime.acpSessionId, modelId: value },
+    );
+    runtime.legacyModels = legacyModelsFromResponse(response) ?? {
+      ...runtime.legacyModels,
+      currentModelId: value,
+    };
+    runtime.configOptions = [legacyModelConfigOption(runtime.legacyModels)];
+    publish(runtime, {
+      type: "config_options",
+      configOptions: runtime.configOptions,
+    });
+    return serialize(runtime);
   }
 
   const params = typeof value === "boolean"
@@ -947,6 +1064,19 @@ export async function closeSession(id: string) {
       });
     }
   } finally {
+    runtime.connection.close();
+    runtime.process.kill();
+  }
+}
+
+export function shutdownAgentRuntime(agentId: AgentId) {
+  for (const [id, runtime] of store.sessions) {
+    if (runtime.agentId !== agentId) continue;
+    for (const permission of runtime.permissions.values()) {
+      permission.resolve({ outcome: { outcome: "cancelled" } });
+    }
+    runtime.permissions.clear();
+    store.sessions.delete(id);
     runtime.connection.close();
     runtime.process.kill();
   }

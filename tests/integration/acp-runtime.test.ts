@@ -150,6 +150,38 @@ describe("ACP runtime with a deterministic stdio agent", () => {
     );
   });
 
+  it("combines streamed agent chunks when a legacy agent omits message IDs", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [fixturePath],
+      env: {
+        FAKE_ACP_LOG: logPath,
+        FAKE_ACP_SCENARIO: "missing-message-ids",
+      },
+      source: "system",
+    });
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+    );
+    const events: SessionStreamEvent[] = [];
+    subscribe(session.id, (event) => events.push(event));
+
+    await promptSession(session.id, "hello");
+
+    const assistantDeltas = events.filter(
+      (event) => event.type === "assistant_delta",
+    );
+    expect(assistantDeltas).toHaveLength(2);
+    expect(new Set(assistantDeltas.map((event) => event.messageId)).size).toBe(1);
+    expect(getPersistedSession(session.id)?.messages).toMatchObject([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "Hello from fake agent" },
+    ]);
+  });
+
   it("keeps a prepared session as a draft until its first prompt", async () => {
     const draft = await createSession(
       { id: "project-1", name: "Workspace", path: workspace },
@@ -175,6 +207,42 @@ describe("ACP runtime with a deterministic stdio agent", () => {
     ).toEqual([expect.objectContaining({ currentValue: "accurate" })]);
   });
 
+  it("normalizes and updates legacy ACP model state", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [fixturePath],
+      env: { FAKE_ACP_LOG: logPath, FAKE_ACP_SCENARIO: "legacy-models" },
+      source: "system",
+    });
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+      { persist: false },
+    );
+
+    expect(session.configOptions).toEqual([
+      expect.objectContaining({
+        id: "model",
+        category: "model",
+        currentValue: "fast",
+      }),
+    ]);
+
+    const configured = await setSessionConfigOption(
+      session.id,
+      "model",
+      "accurate",
+    );
+    expect(configured.configOptions[0]).toMatchObject({
+      currentValue: "accurate",
+    });
+    const methods = (await readLog()).map(({ method }) => method);
+    expect(methods).toContain("session/set_model");
+    expect(methods).not.toContain("session/set_config_option");
+  });
+
   it("keeps an unpersisted draft active when the selected-session view reloads", async () => {
     const draft = await createSession(
       { id: "project-1", name: "Workspace", path: workspace },
@@ -193,7 +261,20 @@ describe("ACP runtime with a deterministic stdio agent", () => {
     });
   });
 
-  it("reloads an idle active session and replaces it with ordered agent history", async () => {
+  it("keeps a healthy idle runtime active when the selected-session view reloads", async () => {
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+    );
+
+    await expect(reloadSession(session.id)).resolves.toMatchObject({
+      id: session.id,
+      status: "ready",
+    });
+    expect((await readLog()).map(({ method }) => method)).not.toContain("session/load");
+  });
+
+  it("loads an inactive persisted session and replaces it with ordered agent history", async () => {
     upsertAgentInstallation({
       id: "fake-agent",
       name: "Fake Agent",
@@ -206,6 +287,7 @@ describe("ACP runtime with a deterministic stdio agent", () => {
       { id: "project-1", name: "Workspace", path: workspace },
       "fake-agent",
     );
+    shutdownRuntime();
 
     const reloaded = await reloadSession(session.id);
 
@@ -243,6 +325,7 @@ describe("ACP runtime with a deterministic stdio agent", () => {
       "fake-agent",
     );
     await promptSession(session.id, "Cached question");
+    shutdownRuntime();
 
     const reload = reloadSession(session.id);
     await waitForLogMethod("session/load");

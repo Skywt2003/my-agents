@@ -89,6 +89,16 @@ function configOptions() {
   ];
 }
 
+function legacyModels() {
+  return {
+    currentModelId: currentModel,
+    availableModels: [
+      { modelId: "fast", name: "Fast" },
+      { modelId: "accurate", name: "Accurate" },
+    ],
+  };
+}
+
 const app = acp
   .agent({ name: "myagents-fake-agent" })
   .onRequest(acp.methods.agent.initialize, (context) => {
@@ -131,7 +141,9 @@ const app = acp
       history.__sessions[sessionId] = sessions.get(sessionId);
       writeHistory(history);
     }
-    return { sessionId, configOptions: configOptions() };
+    return scenario === "legacy-models"
+      ? { sessionId, models: legacyModels() }
+      : { sessionId, configOptions: configOptions() };
   })
   .onRequest(acp.methods.agent.session.load, async (context) => {
     log("session/load", context.params);
@@ -230,6 +242,13 @@ const app = acp
       currentValues: { model: currentModel },
     };
   })
+  .onRequest("session/set_model", (params) => params, (context) => {
+    log("session/set_model", context.params);
+    if (typeof context.params.modelId === "string") {
+      currentModel = context.params.modelId;
+    }
+    return { models: legacyModels() };
+  })
   .onRequest(acp.methods.agent.session.prompt, async (context) => {
     log("session/prompt", context.params);
     const promptText = context.params.prompt
@@ -259,7 +278,7 @@ const app = acp
       sessionId: context.params.sessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
-        messageId,
+        ...(scenario === "missing-message-ids" ? {} : { messageId }),
         content: { type: "text", text: "Hello" },
       },
     });
@@ -267,7 +286,7 @@ const app = acp
       sessionId: context.params.sessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
-        messageId,
+        ...(scenario === "missing-message-ids" ? {} : { messageId }),
         content: { type: "text", text: " from fake agent" },
       },
     });

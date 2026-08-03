@@ -10,13 +10,11 @@ import {
   createSession,
   getSession,
   listSessions,
-  prepareSession,
   promptSession,
   reloadSession,
   resolvePermission,
   setSessionConfigOption,
   shutdownRuntime,
-  subscribe,
   updateSessionTitlePreference,
   validateWorkingDirectory,
 } from "@/lib/acp/runtime";
@@ -70,13 +68,7 @@ export function createDesktopService() {
       ) {
         const message = messageInput.trim();
         if (!message) throw new Error("Message is required.");
-        await prepareSession(id);
-        const unsubscribe = subscribe(id, onEvent);
-        try {
-          await promptSession(id, message);
-        } finally {
-          unsubscribe();
-        }
+        await promptSession(id, message, onEvent);
       },
       setConfigOption: setSessionConfigOption,
       cancel: cancelSession,

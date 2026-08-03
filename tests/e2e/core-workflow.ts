@@ -99,13 +99,12 @@ export async function exerciseCoreWorkflow(page: Page) {
   if (await page.evaluate(() => window.myagents.transport === "browser")) {
     const conversationLoading = page.getByText("Loading conversation", { exact: true });
     const composer = page.getByPlaceholder("Message Fake Agent…");
-    await expect(conversationLoading).toBeVisible();
     await expect(
       page.locator('[data-slot="conversation-scroll-area"]')
         .getByText("Loading conversation", { exact: true }),
     ).toHaveCount(0);
-    await expectBefore(conversationLoading, composer);
-    await expect(composer).toBeDisabled();
+    await expect(conversationLoading).toBeHidden();
+    await expect(composer).toBeEnabled();
     await expect(page.getByText(/permission-allow/)).toBeVisible();
   }
   await expect(page.getByText(/permission-allow/)).toBeVisible();
