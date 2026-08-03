@@ -1,7 +1,4 @@
-"use client";
-
-import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Tabs } from "@base-ui/react/tabs";
 import { cjk } from "@streamdown/cjk";
 import {
@@ -11,11 +8,12 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
-  Code2,
   Download,
   FolderGit2,
   Info,
   LoaderCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Search,
@@ -64,11 +62,16 @@ import { FontSettings } from "@/components/font-settings";
 import { ThemeSettings } from "@/components/theme-toggle";
 import { TerminalPanel } from "@/components/terminal-panel";
 import type {
+  RegistryAgentView,
+  SelectSessionConfigOption,
+  SessionsSnapshot,
+} from "@/lib/myagents/desktop-api";
+import type {
   AgentDescriptor,
   AgentId,
   ChatMessage,
+  ConversationItem,
   PermissionRequest,
-  RegistryAgent,
   SessionStreamEvent,
   SessionConfigOption,
   SessionProject,
@@ -78,18 +81,9 @@ import type {
 import { applySessionEvent } from "@/lib/myagents/session-reducer";
 import { cn } from "@/lib/utils";
 
-type SessionsResponse = {
-  sessions: SessionSummary[];
-  agents: AgentDescriptor[];
-  projects: SessionProject[];
-  syncErrors: Partial<Record<AgentId, string>>;
-};
-
-type RegistryAgentView = RegistryAgent & { installed: boolean };
-type SelectSessionConfigOption = Extract<SessionConfigOption, { type: "select" }>;
-
 type UiPreferences = {
   sidebarWidth: number;
+  sidebarCollapsed: boolean;
   terminalHeight: number;
   collapsedProjectIds: string[];
 };
@@ -110,9 +104,13 @@ const streamdownLinkSafety = {
   renderModal: ExternalLinkSafetyModal,
 } satisfies LinkSafetyConfig;
 const UI_PREFERENCES_STORAGE_KEY = "myagents:ui-preferences:v1";
+const MODEL_OPTIONS_CACHE_STORAGE_KEY = "myagents:model-options-cache:v1";
+const MODEL_OPTIONS_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1_000;
+const MODEL_OPTIONS_CACHE_MAX_ENTRIES = 50;
 const REGISTRY_PAGE_SIZE = 10;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_COLLAPSED_WIDTH = 48;
 const SIDEBAR_HORIZONTAL_PADDING = 24;
 const TERMINAL_MIN_HEIGHT = 180;
 const TERMINAL_MAX_HEIGHT = 720;
@@ -129,9 +127,121 @@ function isModelConfigOption(
   return option.category === "model" && option.type === "select";
 }
 
+type ModelOptionsCacheEntry = {
+  agentFingerprint: string;
+  fetchedAt: number;
+  option: SelectSessionConfigOption;
+};
+
+function modelCacheKey(projectId: string, agentId: AgentId) {
+  return JSON.stringify([projectId, agentId]);
+}
+
+function agentCacheFingerprint(agent: AgentDescriptor) {
+  return JSON.stringify([agent.version ?? null, agent.command, agent.args]);
+}
+
+function isModelOptionValue(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.value === "string" && typeof item.name === "string";
+}
+
+function isCachedModelOption(value: unknown): value is SelectSessionConfigOption {
+  if (!value || typeof value !== "object") return false;
+  const option = value as Record<string, unknown>;
+  if (
+    option.type !== "select" ||
+    option.category !== "model" ||
+    typeof option.id !== "string" ||
+    typeof option.name !== "string" ||
+    typeof option.currentValue !== "string" ||
+    !Array.isArray(option.options)
+  ) return false;
+  return option.options.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    if (!("group" in item)) return isModelOptionValue(item);
+    const group = item as Record<string, unknown>;
+    return typeof group.group === "string" &&
+      typeof group.name === "string" &&
+      Array.isArray(group.options) &&
+      group.options.every(isModelOptionValue);
+  });
+}
+
+function readCachedModelOption(projectId: string, agent: AgentDescriptor | null) {
+  if (!projectId || !agent) return null;
+  try {
+    const cache = JSON.parse(
+      window.localStorage.getItem(MODEL_OPTIONS_CACHE_STORAGE_KEY) ?? "{}",
+    ) as Record<string, Partial<ModelOptionsCacheEntry>>;
+    const entry = cache[modelCacheKey(projectId, agent.id)];
+    if (
+      !entry ||
+      entry.agentFingerprint !== agentCacheFingerprint(agent) ||
+      typeof entry.fetchedAt !== "number" ||
+      Date.now() - entry.fetchedAt > MODEL_OPTIONS_CACHE_MAX_AGE ||
+      !isCachedModelOption(entry.option)
+    ) return null;
+    return entry.option;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedModelOption(
+  projectId: string,
+  agent: AgentDescriptor,
+  option: SelectSessionConfigOption,
+) {
+  try {
+    const stored = JSON.parse(
+      window.localStorage.getItem(MODEL_OPTIONS_CACHE_STORAGE_KEY) ?? "{}",
+    ) as Record<string, ModelOptionsCacheEntry>;
+    const entries = Object.entries(stored)
+      .filter(([, entry]) =>
+        typeof entry?.fetchedAt === "number" &&
+        Date.now() - entry.fetchedAt <= MODEL_OPTIONS_CACHE_MAX_AGE,
+      )
+      .sort(([, left], [, right]) => right.fetchedAt - left.fetchedAt)
+      .slice(0, MODEL_OPTIONS_CACHE_MAX_ENTRIES - 1);
+    const cache = Object.fromEntries(entries);
+    cache[modelCacheKey(projectId, agent.id)] = {
+      agentFingerprint: agentCacheFingerprint(agent),
+      fetchedAt: Date.now(),
+      option,
+    };
+    window.localStorage.setItem(MODEL_OPTIONS_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Model loading still works when local storage is unavailable or full.
+  }
+}
+
+function deleteCachedModelOption(projectId: string, agentId: AgentId) {
+  try {
+    const cache = JSON.parse(
+      window.localStorage.getItem(MODEL_OPTIONS_CACHE_STORAGE_KEY) ?? "{}",
+    ) as Record<string, ModelOptionsCacheEntry>;
+    delete cache[modelCacheKey(projectId, agentId)];
+    window.localStorage.setItem(MODEL_OPTIONS_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Ignore unavailable or malformed local storage.
+  }
+}
+
+function modelOptionHasValue(option: SelectSessionConfigOption, value: string) {
+  return option.options.some((item) =>
+    "group" in item
+      ? item.options.some((nested) => nested.value === value)
+      : item.value === value,
+  );
+}
+
 function ModelSelect({
   id,
   session,
+  previewModel = null,
+  previewValue = null,
   loading = false,
   disabled = false,
   onPrepare,
@@ -139,19 +249,26 @@ function ModelSelect({
 }: {
   id: string;
   session: SessionSummary | null;
+  previewModel?: SelectSessionConfigOption | null;
+  previewValue?: string | null;
   loading?: boolean;
   disabled?: boolean;
   onPrepare?: () => void;
-  onChange: (session: SessionSummary, option: SessionConfigOption, value: string) => void;
+  onChange: (
+    session: SessionSummary | null,
+    option: SessionConfigOption,
+    value: string,
+  ) => void;
 }) {
-  const model = session?.configOptions.find(isModelConfigOption);
-  const unavailable = Boolean(session && !model);
+  const liveModel = session?.configOptions.find(isModelConfigOption);
+  const model = liveModel ?? previewModel ?? undefined;
+  const unavailable = Boolean(session && !liveModel);
   const items = model?.options.flatMap((option) =>
     "group" in option
       ? option.options.map((item) => ({ label: item.name, value: item.value }))
       : [{ label: option.name, value: option.value }],
   ) ?? [];
-  const placeholder = loading
+  const placeholder = loading && !model
     ? "Loading models…"
     : unavailable
       ? "Agent default"
@@ -160,13 +277,13 @@ function ModelSelect({
   return (
     <Select
       items={items}
-      value={model?.currentValue ?? null}
-      disabled={disabled || loading || unavailable}
+      value={liveModel?.currentValue ?? previewValue}
+      disabled={disabled || (loading && !model) || unavailable}
       onOpenChange={(open) => {
         if (open) onPrepare?.();
       }}
       onValueChange={(value) => {
-        if (session && model && value) onChange(session, model, value);
+        if (model && value) onChange(session, model, value);
       }}
     >
       <SelectTrigger
@@ -205,6 +322,8 @@ export function MyAgentsApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftSession, setDraftSession] = useState<SessionSummary | null>(null);
+  const [cachedModel, setCachedModel] = useState<SelectSessionConfigOption | null>(null);
+  const [pendingModelValue, setPendingModelValue] = useState<string | null>(null);
   const [creatingSessionView, setCreatingSessionView] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -224,11 +343,15 @@ export function MyAgentsApp() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(280);
   const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const [syncErrors, setSyncErrors] = useState<
     Partial<Record<AgentId, string>>
   >({});
   const conversationRef = useRef<HTMLDivElement>(null);
+  const draftGenerationRef = useRef(0);
+  const draftPreparationRef = useRef<Promise<SessionSummary | null> | null>(null);
+  const pendingModelValueRef = useRef<string | null>(null);
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === agentId) ?? null,
@@ -280,6 +403,9 @@ export function MyAgentsApp() {
             ),
           );
         }
+        if (typeof preferences.sidebarCollapsed === "boolean") {
+          setSidebarCollapsed(preferences.sidebarCollapsed);
+        }
         if (
           typeof preferences.terminalHeight === "number" &&
           Number.isFinite(preferences.terminalHeight)
@@ -313,6 +439,7 @@ export function MyAgentsApp() {
     if (!preferencesLoaded) return;
     const preferences: UiPreferences = {
       sidebarWidth,
+      sidebarCollapsed,
       terminalHeight,
       collapsedProjectIds: Array.from(collapsedProjectIds),
     };
@@ -324,33 +451,33 @@ export function MyAgentsApp() {
     } catch {
       // The UI remains usable when storage is disabled or full.
     }
-  }, [collapsedProjectIds, preferencesLoaded, sidebarWidth, terminalHeight]);
+  }, [
+    collapsedProjectIds,
+    preferencesLoaded,
+    sidebarCollapsed,
+    sidebarWidth,
+    terminalHeight,
+  ]);
 
   useEffect(() => {
-    void fetch("/api/sessions", { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load local sessions.");
-        return (await response.json()) as SessionsResponse;
-      })
+    void window.myagents.sessions.list()
       .then((data) => {
+        const initialProjectId = data.projects[0]?.id ?? "";
+        const initialAgent = data.agents.find(({ id }) => id === "codex") ??
+          data.agents.find(({ available, enabled }) => available && enabled) ??
+          data.agents[0] ??
+          null;
+        const initialAgentId = initialAgent?.id ?? "codex";
         setSessions(data.sessions);
         setProjects(data.projects);
         setAgents(data.agents);
         setSyncErrors(data.syncErrors);
         setSelectedId(data.sessions[0]?.id ?? null);
         setCreatingSessionView(data.sessions.length === 0);
-        setProjectId(data.projects[0]?.id ?? "");
-        setAgentId(
-          data.agents.find(({ id }) => id === "codex")?.id ??
-            data.agents.find(({ available, enabled }) => available && enabled)?.id ??
-            data.agents[0]?.id ??
-            "codex",
-        );
-        void fetch("/api/sessions?sync=1", { cache: "no-store" })
-          .then(async (response) => {
-            if (!response.ok) throw new Error("Could not sync agent history.");
-            return (await response.json()) as SessionsResponse;
-          })
+        setProjectId(initialProjectId);
+        setAgentId(initialAgentId);
+        setCachedModel(readCachedModelOption(initialProjectId, initialAgent));
+        void window.myagents.sessions.list(true)
           .then((synced) => {
             setSessions(synced.sessions);
             setProjects(synced.projects);
@@ -365,17 +492,17 @@ export function MyAgentsApp() {
 
   useEffect(() => {
     if (!selectedId) return;
-    void refreshSession(selectedId, true);
+    void refreshSession(selectedId, true, true);
     // The selected session is the only trigger; refreshSession is intentionally stable by ID.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = conversationRef.current?.querySelector<HTMLElement>(
       '[data-slot="scroll-area-viewport"]',
     );
-    viewport?.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-  }, [selected?.messages, selected?.activities, selected?.pendingPermissions]);
+    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+  }, [selectedId, selected?.conversation]);
 
   function patchSession(id: string, update: (session: SessionSummary) => SessionSummary) {
     setSessions((current) =>
@@ -392,10 +519,30 @@ export function MyAgentsApp() {
     });
   }
 
-  function openNewSession(nextProjectId?: string, preserveDraft = false) {
-    if (nextProjectId) setProjectId(nextProjectId);
-    if (!preserveDraft) setDraft("");
+  function discardDraftSession() {
+    draftGenerationRef.current += 1;
+    draftPreparationRef.current = null;
+    setCreating(false);
+    pendingModelValueRef.current = null;
+    setPendingModelValue(null);
+    const session = draftSession;
     setDraftSession(null);
+    if (session) {
+      void window.myagents.sessions.discard(session.id).catch((error) =>
+        setPageError(getError(error)),
+      );
+    }
+  }
+
+  function openNewSession(nextProjectId?: string, preserveDraft = false) {
+    if (nextProjectId) {
+      setProjectId(nextProjectId);
+      setCachedModel(readCachedModelOption(nextProjectId, selectedAgent));
+    } else {
+      setCachedModel(readCachedModelOption(projectId, selectedAgent));
+    }
+    if (!preserveDraft) setDraft("");
+    discardDraftSession();
     setSelectedId(null);
     setCreatingSessionView(true);
     setPageError(null);
@@ -405,12 +552,13 @@ export function MyAgentsApp() {
     setSyncing(true);
     setPageError(null);
     try {
-      const response = await fetch("/api/sessions?sync=1", { cache: "no-store" });
-      const data = (await response.json()) as SessionsResponse & { error?: string };
-      if (!response.ok) {
-        throw new Error(data.error ?? "Could not sync agent sessions.");
-      }
-      setSessions(data.sessions);
+      const data: SessionsSnapshot = await window.myagents.sessions.list(true);
+      const refreshed = selectedId
+        ? await window.myagents.sessions.reload(selectedId)
+        : null;
+      setSessions(data.sessions.map((session) =>
+        session.id === refreshed?.id ? refreshed : session
+      ));
       setProjects(data.projects);
       setAgents(data.agents);
       setSyncErrors(data.syncErrors);
@@ -421,26 +569,36 @@ export function MyAgentsApp() {
     }
   }
 
-  async function refreshSession(id: string, showLoading = false) {
+  async function refreshSession(
+    id: string,
+    showLoading = false,
+    reload = false,
+  ) {
     if (showLoading) setLoadingSessionId(id);
     try {
-      const response = await fetch(`/api/sessions/${id}`, { cache: "no-store" });
-      const data = (await response.json()) as {
-        session?: SessionSummary;
-        error?: string;
-      };
-      if (!response.ok || !data.session) {
-        throw new Error(data.error ?? "Could not load session.");
+      const session = reload
+        ? await window.myagents.sessions.reload(id)
+        : await window.myagents.sessions.get(id);
+      const sessionAgent = agents.find(({ id: agent }) => agent === session.agentId);
+      const model = session.configOptions.find(isModelConfigOption);
+      if (sessionAgent && model) {
+        writeCachedModelOption(session.project.id, sessionAgent, model);
+      } else if (!model) {
+        deleteCachedModelOption(session.project.id, session.agentId);
       }
-      patchSession(id, () => data.session!);
+      patchSession(id, () => session);
     } catch (error) {
       setPageError(getError(error));
     } finally {
-      if (showLoading) setLoadingSessionId(null);
+      if (showLoading) {
+        setLoadingSessionId((current) => current === id ? null : current);
+      }
     }
   }
 
-  async function createSession(selectSession = true) {
+  async function prepareSessionDraft() {
+    if (draftSession) return draftSession;
+    if (draftPreparationRef.current) return draftPreparationRef.current;
     if (!selectedAgent?.available) {
       setPageError("The selected ACP agent executable is not available.");
       return null;
@@ -449,31 +607,52 @@ export function MyAgentsApp() {
       setPageError("Choose a project before starting a session.");
       return null;
     }
+    const generation = draftGenerationRef.current;
+    const nextProjectId = projectId;
+    const nextAgentId = agentId;
+    const nextAgent = selectedAgent;
+    const preparation = (async () => {
+      const session = await window.myagents.sessions.create(nextProjectId, nextAgentId);
+      if (generation !== draftGenerationRef.current) {
+        await window.myagents.sessions.discard(session.id);
+        return null;
+      }
+
+      const model = session.configOptions.find(isModelConfigOption) ?? null;
+      if (model) {
+        writeCachedModelOption(nextProjectId, nextAgent, model);
+        setCachedModel(model);
+      } else {
+        deleteCachedModelOption(nextProjectId, nextAgentId);
+        setCachedModel(null);
+      }
+      setDraftSession(session);
+
+      const pendingValue = pendingModelValueRef.current;
+      if (pendingValue) {
+        pendingModelValueRef.current = null;
+        setPendingModelValue(null);
+        if (model && modelOptionHasValue(model, pendingValue)) {
+          await changeModel(session, model, pendingValue);
+        } else {
+          setPageError("The cached model is no longer available. Using the agent default.");
+        }
+      }
+      return session;
+    })();
+    draftPreparationRef.current = preparation;
     setCreating(true);
     setPageError(null);
     try {
-      const response = await fetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, agentId }),
-      });
-      const data = (await response.json()) as { session?: SessionSummary; error?: string };
-      if (!response.ok || !data.session) throw new Error(data.error ?? "Could not create session.");
-      setSessions((current) => current.some(({ id }) => id === data.session!.id)
-        ? current.map((session) => session.id === data.session!.id ? data.session! : session)
-        : [data.session!, ...current]);
-      if (selectSession) {
-        setSelectedId(data.session.id);
-        setCreatingSessionView(false);
-      } else {
-        setDraftSession(data.session);
-      }
-      return data.session;
+      return await preparation;
     } catch (error) {
       setPageError(getError(error));
       return null;
     } finally {
-      setCreating(false);
+      if (draftPreparationRef.current === preparation) {
+        draftPreparationRef.current = null;
+        setCreating(false);
+      }
     }
   }
 
@@ -482,26 +661,15 @@ export function MyAgentsApp() {
     setAddingProject(true);
     setProjectError(null);
     try {
-      const response = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: projectName, path: projectPath }),
-      });
-      const data = (await response.json()) as {
-        project?: SessionProject;
-        error?: string;
-      };
-      if (!response.ok || !data.project) {
-        throw new Error(data.error ?? "Could not add project.");
-      }
-      setProjects((current) => [...current, data.project!].sort((a, b) =>
+      const project = await window.myagents.projects.create(projectName, projectPath);
+      setProjects((current) => [...current, project].sort((a, b) =>
         a.name.localeCompare(b.name),
       ));
-      setProjectId(data.project.id);
+      setProjectId(project.id);
       setProjectName("");
       setProjectPath("");
       setProjectDialogOpen(false);
-      openNewSession(data.project.id, preserveDraft);
+      openNewSession(project.id, preserveDraft);
     } catch (error) {
       setProjectError(getError(error));
     } finally {
@@ -512,11 +680,13 @@ export function MyAgentsApp() {
   function replaceAgents(nextAgents: AgentDescriptor[]) {
     setAgents(nextAgents);
     if (!nextAgents.some(({ id }) => id === agentId)) {
-      setAgentId(
-        nextAgents.find(({ available, enabled }) => available && enabled)?.id ??
-          nextAgents[0]?.id ??
-          "codex",
-      );
+      discardDraftSession();
+      const nextAgent = nextAgents.find(
+        ({ available, enabled }) => available && enabled,
+      ) ?? nextAgents[0] ?? null;
+      const nextAgentId = nextAgent?.id ?? "codex";
+      setAgentId(nextAgentId);
+      setCachedModel(readCachedModelOption(projectId, nextAgent));
     }
   }
 
@@ -529,7 +699,12 @@ export function MyAgentsApp() {
     messageInput = draft,
   ) {
     const message = messageInput.trim();
-    if (!target || !message || target.status === "running") return;
+    if (
+      !target ||
+      !message ||
+      target.status === "running" ||
+      loadingSessionId === target.id
+    ) return;
     const id = target.id;
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(), role: "user", content: message, createdAt: new Date().toISOString(),
@@ -543,31 +718,17 @@ export function MyAgentsApp() {
       status: "running",
       error: undefined,
       messages: [...session.messages, userMessage],
+      conversation: [
+        ...session.conversation,
+        { type: "message", message: userMessage },
+      ],
     }));
 
     try {
-      const response = await fetch(`/api/sessions/${id}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      if (!response.ok || !response.body) {
-        const data = (await response.json()) as { error?: string };
-        throw new Error(data.error ?? `${target.agentName} did not accept the message.`);
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) if (line.trim()) applyEvent(id, JSON.parse(line));
-        if (done) break;
-      }
-      if (buffer.trim()) applyEvent(id, JSON.parse(buffer));
-      await refreshSession(id);
+      await window.myagents.sessions.prompt(id, message, (event) =>
+        applyEvent(id, event),
+      );
+      await refreshSession(id, true, true);
     } catch (error) {
       patchSession(id, (session) => ({ ...session, status: "error", error: getError(error) }));
     }
@@ -580,8 +741,11 @@ export function MyAgentsApp() {
       draftSession.agentId === agentId
       ? draftSession
       : null;
-    const session = preparedSession ?? await createSession(false);
+    const session = preparedSession ?? await prepareSessionDraft();
     if (session) {
+      setSessions((current) => current.some(({ id }) => id === session.id)
+        ? current.map((item) => item.id === session.id ? session : item)
+        : [session, ...current]);
       setSelectedId(session.id);
       setCreatingSessionView(false);
       setDraftSession(null);
@@ -591,7 +755,7 @@ export function MyAgentsApp() {
 
   async function prepareNewSessionModels() {
     if (creating || draftSession || !projectId || !selectedAgent?.available) return;
-    await createSession(false);
+    await prepareSessionDraft();
   }
 
   async function changeModel(
@@ -602,20 +766,23 @@ export function MyAgentsApp() {
     setUpdatingModelSessionId(session.id);
     setPageError(null);
     try {
-      const response = await fetch(`/api/sessions/${session.id}/config-options`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ configId: option.id, value }),
-      });
-      const data = (await response.json()) as {
-        session?: SessionSummary;
-        error?: string;
-      };
-      if (!response.ok || !data.session) {
-        throw new Error(data.error ?? "Could not change the session model.");
+      const updated = await window.myagents.sessions.setConfigOption(
+        session.id,
+        option.id,
+        value,
+      );
+      const updatedModel = updated.configOptions.find(isModelConfigOption);
+      if (updatedModel) {
+        const updatedAgent = agents.find(({ id }) => id === updated.agentId);
+        if (updatedAgent) {
+          writeCachedModelOption(updated.project.id, updatedAgent, updatedModel);
+        }
+        if (updated.project.id === projectId && updated.agentId === agentId) {
+          setCachedModel(updatedModel);
+        }
       }
-      patchSession(session.id, () => data.session!);
-      setDraftSession((current) => current?.id === session.id ? data.session! : current);
+      patchSession(session.id, () => updated);
+      setDraftSession((current) => current?.id === session.id ? updated : current);
     } catch (error) {
       setPageError(getError(error));
     } finally {
@@ -624,32 +791,62 @@ export function MyAgentsApp() {
   }
 
   async function stopSession() {
-    if (selected) await fetch(`/api/sessions/${selected.id}/cancel`, { method: "POST" });
+    if (selected) await window.myagents.sessions.cancel(selected.id);
   }
 
   async function resolvePermission(permission: PermissionRequest, optionId?: string) {
     if (!selected) return;
-    const response = await fetch(`/api/sessions/${selected.id}/permissions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ permissionId: permission.id, optionId }),
-    });
-    if (response.ok) {
+    try {
+      await window.myagents.sessions.resolvePermission(
+        selected.id,
+        permission.id,
+        optionId,
+      );
       patchSession(selected.id, (session) => ({
         ...session,
         pendingPermissions: session.pendingPermissions.filter((item) => item.id !== permission.id),
       }));
+    } catch (error) {
+      setPageError(getError(error));
     }
   }
 
   return (
     <main
-      className="grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background"
-      style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
+      className="grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background transition-[grid-template-columns] duration-200"
+      style={{
+        gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px minmax(0, 1fr)`,
+      }}
     >
-      <aside className="relative flex min-h-0 flex-col border-r bg-sidebar">
-        <div className="flex h-12 shrink-0 items-center px-5">
-          <p className="text-sm font-semibold">MyAgents</p>
+      <aside
+        aria-label="Session sidebar"
+        className="relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-sidebar"
+      >
+        <div className={cn(
+          "flex h-12 shrink-0 items-center gap-2",
+          sidebarCollapsed ? "justify-center px-2" : "px-5",
+        )}>
+          {!sidebarCollapsed ? (
+            <>
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold">MyAgents</p>
+              {window.myagents.transport === "browser" ? (
+                <Badge variant="outline" className="shrink-0 text-[9px] uppercase tracking-wide">
+                  Browser debug
+                </Badge>
+              ) : null}
+            </>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0"
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!sidebarCollapsed}
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          </Button>
         </div>
         <Dialog open={projectDialogOpen} onOpenChange={(open) => {
           setProjectDialogOpen(open);
@@ -665,14 +862,16 @@ export function MyAgentsApp() {
             <DialogFooter><Button variant="ghost" onClick={() => setProjectDialogOpen(false)}>Cancel</Button><Button onClick={() => void addProject()} disabled={addingProject || !projectName.trim() || !projectPath.trim()}>{addingProject && <LoaderCircle className="animate-spin" />}Add project</Button></DialogFooter>
           </DialogContent>
         </Dialog>
-        <Separator />
-        <ScrollArea className="min-h-0 flex-1">
+        {!sidebarCollapsed ? (
+          <>
+            <Separator />
+            <ScrollArea className="min-h-0 flex-1">
           <div className="overflow-x-hidden px-3 py-3">
             <div className="mb-2 flex h-6 items-center justify-between pl-2 pr-1"><p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Projects</p><div className="flex items-center gap-0.5"><Button type="button" variant="ghost" size="icon-xs" onClick={() => setProjectDialogOpen(true)} aria-label="Add project"><Plus /></Button><Button type="button" variant="ghost" size="icon-xs" disabled={loading || syncing} onClick={() => void syncSessions()} aria-label={syncing ? "Syncing agent sessions" : "Sync agent sessions"}><RefreshCw className={cn(syncing && "animate-spin")} /></Button></div></div>
             {loading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading" /> : projects.length === 0 ? (
               <button type="button" onClick={() => setProjectDialogOpen(true)} className="w-full rounded-lg px-2 py-3 text-left text-xs leading-5 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground">No projects yet. Add one to start a session.</button>
             ) : <div data-slot="session-directory" className="max-w-full space-y-1" style={{ width: sidebarWidth - SIDEBAR_HORIZONTAL_PADDING }}>{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center gap-1" onMouseEnter={() => setHoveredProjectId(project.id)} onMouseLeave={() => setHoveredProjectId((current) => current === project.id ? null : current)}><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span></button><Button type="button" variant="ghost" size="icon-xs" className={cn("mr-1 opacity-0 transition-opacity focus-visible:opacity-100", hoveredProjectId === project.id && "opacity-100")} aria-label={`New session in ${project.name}`} onClick={() => openNewSession(project.id)}><Plus /></Button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
-              <button key={session.id} onClick={() => { setSelectedId(session.id); setCreatingSessionView(false); }} className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors", selectedId === session.id && !creatingSessionView ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
+              <button key={session.id} onClick={() => { discardDraftSession(); setSelectedId(session.id); setCreatingSessionView(false); }} className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors", selectedId === session.id && !creatingSessionView ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{session.title}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <AgentIcon session={session} />
@@ -694,9 +893,9 @@ export function MyAgentsApp() {
               </button>
             ))}</div>}</section>; })}</div>}
           </div>
-        </ScrollArea>
-        <div className="border-t p-3"><div className="flex items-center gap-2 rounded-lg px-2 py-2"><Avatar className="size-7 rounded-md"><AvatarFallback className="rounded-md bg-muted"><Code2 /></AvatarFallback></Avatar><div className="min-w-0 flex-1"><p className="text-xs font-medium">Local agents</p><p className="truncate text-[10px] text-muted-foreground">{agents.filter(({ enabled }) => enabled).length} ACP agents</p></div><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
-        <ResizeHandle
+            </ScrollArea>
+            <div className="h-12 border-t px-3"><div className="flex h-full items-center gap-2 rounded-lg px-2"><Avatar size="sm" className="rounded-md"><AvatarFallback className="rounded-md bg-muted"><Bot className="size-3.5" /></AvatarFallback></Avatar><p className="min-w-0 flex-1 truncate text-xs font-medium">{agents.filter(({ enabled }) => enabled).length} Agents</p><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
+            <ResizeHandle
           orientation="vertical"
           value={sidebarWidth}
           min={SIDEBAR_MIN_WIDTH}
@@ -709,7 +908,9 @@ export function MyAgentsApp() {
             );
             setSidebarWidth(Math.min(maximum, value));
           }}
-        />
+            />
+          </>
+        ) : null}
       </aside>
 
       <section className="flex min-h-0 min-w-0 flex-col">
@@ -727,11 +928,12 @@ export function MyAgentsApp() {
                     <Select
                       items={projects.map((project) => ({ label: project.name, value: project.id }))}
                       value={projectId || null}
-                      disabled={projects.length === 0}
+                      disabled={projects.length === 0 || creating}
                       onValueChange={(value) => {
                         if (!value) return;
+                        discardDraftSession();
                         setProjectId(value);
-                        setDraftSession(null);
+                        setCachedModel(readCachedModelOption(value, selectedAgent));
                       }}
                     >
                       <SelectTrigger id="new-session-project" size="sm" className="max-w-56 text-xs" aria-label="Project">
@@ -751,10 +953,15 @@ export function MyAgentsApp() {
                         value: agent.id,
                       }))}
                       value={agentId}
+                      disabled={creating}
                       onValueChange={(value) => {
                         if (!value) return;
+                        discardDraftSession();
                         setAgentId(value);
-                        setDraftSession(null);
+                        setCachedModel(readCachedModelOption(
+                          projectId,
+                          agents.find(({ id }) => id === value) ?? null,
+                        ));
                       }}
                     >
                       <SelectTrigger id="new-session-agent" size="sm" className="max-w-56 text-xs" aria-label="Agent">
@@ -773,10 +980,20 @@ export function MyAgentsApp() {
                     <ModelSelect
                       id="new-session-model"
                       session={draftSession}
+                      previewModel={cachedModel}
+                      previewValue={pendingModelValue}
                       loading={creating && !draftSession}
                       disabled={!projectId || !selectedAgent?.available || updatingModelSessionId === draftSession?.id}
                       onPrepare={() => void prepareNewSessionModels()}
-                      onChange={(session, option, value) => void changeModel(session, option, value)}
+                      onChange={(session, option, value) => {
+                        if (session) {
+                          void changeModel(session, option, value);
+                          return;
+                        }
+                        pendingModelValueRef.current = value;
+                        setPendingModelValue(value);
+                        void prepareNewSessionModels();
+                      }}
                     />
                     {projects.length === 0 && <Button type="button" size="sm" variant="ghost" onClick={() => setProjectDialogOpen(true)}><Plus />Add project</Button>}
                   </div>
@@ -791,8 +1008,8 @@ export function MyAgentsApp() {
           <header className="flex h-12 shrink-0 items-center justify-between border-b px-6"><div className="flex min-w-0 items-center gap-2"><h1 className="min-w-0 truncate text-sm font-semibold">{selected.title}</h1><SessionDetailsDialog session={selected} onSessionChanged={(session) => patchSession(session.id, () => session)} /><AgentIcon session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></header>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
-              <ScrollArea ref={conversationRef} className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8">{selected.messages.length === 0 && selected.activities.length === 0 ? <EmptyConversation /> : <div className="space-y-7">{selected.messages.map((message, index) => <Message key={message.id} message={message} isStreaming={selected.status === "running" && message.role === "assistant" && index === selected.messages.length - 1} />)}{selected.activities.length > 0 && <ActivityGroup activities={selected.activities} />}{selected.pendingPermissions.map((permission) => <Permission key={permission.id} permission={permission} onResolve={resolvePermission} />)}{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div>}</div></ScrollArea>
-              <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error"} /><div className="flex items-center justify-between gap-2 px-1 pb-1"><ModelSelect id={`session-${selected.id}-model`} session={selected} disabled={selected.status === "running" || selected.status === "error" || updatingModelSessionId === selected.id} onChange={(session, option, value) => void changeModel(session, option, value)} />{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={() => void sendMessage()} disabled={!draft.trim() || selected.status === "error"} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
+              <ScrollArea ref={conversationRef} data-slot="conversation-scroll-area" className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8"><div className="space-y-7"><ConversationTimeline session={selected} onResolvePermission={resolvePermission} />{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div></div></ScrollArea>
+              <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}{loadingSessionId === selected.id ? <div role="status" aria-live="polite" className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" /><span>Loading conversation</span></div> : null}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error" || loadingSessionId === selected.id} /><div className="flex items-center justify-between gap-2 px-1 pb-1"><ModelSelect id={`session-${selected.id}-model`} session={selected} disabled={selected.status === "running" || selected.status === "error" || loadingSessionId === selected.id || updatingModelSessionId === selected.id} onChange={(session, option, value) => { if (session) void changeModel(session, option, value); }} />{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={() => void sendMessage()} disabled={!draft.trim() || selected.status === "error" || loadingSessionId === selected.id} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
             </div>
             <TerminalPanel sessionId={selected.id} cwd={selected.cwd} open={terminalOpen} height={terminalHeight} onHeightChange={setTerminalHeight} onClose={() => setTerminalOpen(false)} />
           </div>
@@ -832,19 +1049,12 @@ function SessionDetailsDialog({
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch(`/api/sessions/${session.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ titleMode, customTitle }),
-      });
-      const data = (await response.json()) as {
-        session?: SessionSummary;
-        error?: string;
-      };
-      if (!response.ok || !data.session) {
-        throw new Error(data.error ?? "Could not update the session name.");
-      }
-      onSessionChanged(data.session);
+      const updated = await window.myagents.sessions.updateTitle(
+        session.id,
+        titleMode,
+        customTitle,
+      );
+      onSessionChanged(updated);
       setOpen(false);
     } catch (saveError) {
       setError(getError(saveError));
@@ -955,17 +1165,8 @@ function AgentSettingsDialog({
     if (registry.length > 0 || registryLoading) return;
     setRegistryLoading(true);
     setRegistryError(null);
-    void fetch("/api/agents/registry", { cache: "no-store" })
-      .then(async (response) => {
-        const data = (await response.json()) as {
-          agents?: RegistryAgentView[];
-          error?: string;
-        };
-        if (!response.ok || !data.agents) {
-          throw new Error(data.error ?? "Could not load ACP Registry.");
-        }
-        setRegistry(data.agents);
-      })
+    void window.myagents.agents.registry()
+      .then(setRegistry)
       .catch((error) => setRegistryError(getError(error)))
       .finally(() => setRegistryLoading(false));
   }
@@ -1009,19 +1210,8 @@ function AgentSettingsDialog({
     setInstallingId(registryId);
     setRegistryError(null);
     try {
-      const response = await fetch("/api/agents/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ registryId }),
-      });
-      const data = (await response.json()) as {
-        agents?: AgentDescriptor[];
-        error?: string;
-      };
-      if (!response.ok || !data.agents) {
-        throw new Error(data.error ?? "Could not install ACP agent.");
-      }
-      onAgentsChanged(data.agents);
+      const nextAgents = await window.myagents.agents.install(registryId);
+      onAgentsChanged(nextAgents);
       setRegistry((current) =>
         current.map((agent) =>
           agent.id === registryId ? { ...agent, installed: true } : agent,
@@ -1037,17 +1227,8 @@ function AgentSettingsDialog({
   async function deleteAgent(id: string) {
     setRegistryError(null);
     try {
-      const response = await fetch(`/api/agents?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      const data = (await response.json()) as {
-        agents?: AgentDescriptor[];
-        error?: string;
-      };
-      if (!response.ok || !data.agents) {
-        throw new Error(data.error ?? "Could not remove ACP agent.");
-      }
-      onAgentsChanged(data.agents);
+      const nextAgents = await window.myagents.agents.remove(id);
+      onAgentsChanged(nextAgents);
       setRegistry((current) =>
         current.map((agent) =>
           agent.id === id ? { ...agent, installed: false } : agent,
@@ -1135,10 +1316,6 @@ function NoSession({ loading, error, onCreate }: { loading: boolean; error: stri
   return <div className="flex h-full flex-col items-center justify-center px-6 text-center"><div className="mb-5 flex size-12 items-center justify-center rounded-xl border bg-card">{loading ? <LoaderCircle className="animate-spin text-muted-foreground" /> : <Bot className="text-muted-foreground" />}</div><h1 className="text-lg font-semibold">{loading ? "Loading MyAgents" : "Start with a fresh session"}</h1><p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{error ?? "Connect to a local ACP agent and work inside any folder on this machine."}</p>{!loading && <Button className="mt-5" size="sm" onClick={onCreate}><Plus />New session</Button>}</div>;
 }
 
-function EmptyConversation() {
-  return <div className="flex min-h-[44vh] flex-col items-center justify-center text-center"><div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-muted"><Sparkles className="size-4 text-muted-foreground" /></div><h2 className="text-base font-semibold">What would you like to build?</h2><p className="mt-1.5 max-w-sm text-xs leading-5 text-muted-foreground">Ask the agent to inspect code, explain a problem, or make a change in this workspace.</p></div>;
-}
-
 function Message({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
   const user = message.role === "user";
   if (user) {
@@ -1209,12 +1386,11 @@ function AgentIcon({ session }: { session: SessionSummary }) {
       className="flex size-4 shrink-0 items-center justify-center text-foreground"
     >
       {iconUrl ? (
-        <Image
+        <img
           src={iconUrl}
           alt=""
           width={16}
           height={16}
-          unoptimized
           className="size-3.5 dark:invert"
           onError={() => setFailedIconUrl(iconUrl)}
         />
@@ -1223,6 +1399,73 @@ function AgentIcon({ session }: { session: SessionSummary }) {
       )}
     </span>
   );
+}
+
+type ConversationRenderItem =
+  | Extract<ConversationItem, { type: "message" | "permission" }>
+  | { type: "tools"; key: string; activities: ToolActivity[] };
+
+function groupConversationItems(
+  conversation: ConversationItem[],
+): ConversationRenderItem[] {
+  const items: ConversationRenderItem[] = [];
+  for (const item of conversation) {
+    if (item.type !== "tool") {
+      items.push(item);
+      continue;
+    }
+    const previous = items.at(-1);
+    if (previous?.type === "tools") {
+      previous.activities.push(item.activity);
+    } else {
+      items.push({
+        type: "tools",
+        key: `tools-${item.activity.id}`,
+        activities: [item.activity],
+      });
+    }
+  }
+  return items;
+}
+
+function ConversationTimeline({
+  session,
+  onResolvePermission,
+}: {
+  session: SessionSummary;
+  onResolvePermission: (
+    permission: PermissionRequest,
+    optionId?: string,
+  ) => Promise<void>;
+}) {
+  const items = groupConversationItems(session.conversation);
+  const lastMessage = session.messages.at(-1);
+
+  return items.map((item) => {
+    if (item.type === "message") {
+      return (
+        <Message
+          key={`message-${item.message.id}`}
+          message={item.message}
+          isStreaming={
+            session.status === "running" &&
+            item.message.role === "assistant" &&
+            item.message.id === lastMessage?.id
+          }
+        />
+      );
+    }
+    if (item.type === "permission") {
+      return (
+        <Permission
+          key={`permission-${item.permission.id}`}
+          permission={item.permission}
+          onResolve={onResolvePermission}
+        />
+      );
+    }
+    return <ActivityGroup key={item.key} activities={item.activities} />;
+  });
 }
 
 function ActivityGroup({ activities }: { activities: ToolActivity[] }) {

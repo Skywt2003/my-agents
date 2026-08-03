@@ -1,5 +1,3 @@
-import "server-only";
-
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -10,6 +8,7 @@ import type {
   AgentInput,
   AgentSource,
   ChatMessage,
+  ConversationItem,
   ProjectInput,
   SessionSource,
   SessionProject,
@@ -91,6 +90,11 @@ type ActivityRow = {
   title: string;
   kind: string;
   status: ToolActivity["status"];
+};
+
+type ConversationRow = {
+  item_type: "message" | "tool";
+  item_id: string;
 };
 
 let database: Database.Database | null = null;
@@ -391,21 +395,69 @@ function getDatabase() {
       PRIMARY KEY (session_id, id)
     );
 
+    CREATE TABLE IF NOT EXISTS conversation_items (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      item_type TEXT NOT NULL CHECK (item_type IN ('message', 'tool')),
+      item_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      PRIMARY KEY (session_id, item_type, item_id)
+    );
+
     CREATE INDEX IF NOT EXISTS sessions_updated_at_idx
       ON sessions(updated_at DESC);
     CREATE INDEX IF NOT EXISTS messages_session_sequence_idx
       ON messages(session_id, sequence);
     CREATE INDEX IF NOT EXISTS activities_session_sequence_idx
       ON activities(session_id, sequence);
+    CREATE INDEX IF NOT EXISTS conversation_items_session_sequence_idx
+      ON conversation_items(session_id, sequence);
     CREATE INDEX IF NOT EXISTS agents_registry_id_idx
       ON agents(registry_id);
   `);
+  backfillConversationItems(database);
 
   const foreignKeyErrors = database.pragma("foreign_key_check") as unknown[];
   if (foreignKeyErrors.length > 0) {
     throw new Error("MyAgents database migration failed its foreign-key check.");
   }
   return database;
+}
+
+function backfillConversationItems(db: Database.Database) {
+  const sessionIds = db.prepare(`
+    SELECT sessions.id
+    FROM sessions
+    WHERE NOT EXISTS (
+      SELECT 1 FROM conversation_items
+      WHERE conversation_items.session_id = sessions.id
+    )
+    AND (
+      EXISTS (SELECT 1 FROM messages WHERE messages.session_id = sessions.id)
+      OR EXISTS (SELECT 1 FROM activities WHERE activities.session_id = sessions.id)
+    )
+  `).all() as Array<{ id: string }>;
+  const messages = db.prepare(`
+    SELECT id FROM messages WHERE session_id = ? ORDER BY sequence
+  `);
+  const activities = db.prepare(`
+    SELECT id FROM activities WHERE session_id = ? ORDER BY sequence
+  `);
+  const insert = db.prepare(`
+    INSERT INTO conversation_items (session_id, item_type, item_id, sequence)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  db.transaction(() => {
+    for (const { id: sessionId } of sessionIds) {
+      let sequence = 0;
+      for (const row of messages.all(sessionId) as Array<{ id: string }>) {
+        insert.run(sessionId, "message", row.id, sequence++);
+      }
+      for (const row of activities.all(sessionId) as Array<{ id: string }>) {
+        insert.run(sessionId, "tool", row.id, sequence++);
+      }
+    }
+  })();
 }
 
 function toInstalledAgent(row: AgentRow): InstalledAgent {
@@ -512,6 +564,10 @@ function toSummary(
   row: SessionRow,
   messages: ChatMessage[] = [],
   activities: ToolActivity[] = [],
+  conversation: ConversationItem[] = [
+    ...messages.map((message): ConversationItem => ({ type: "message", message })),
+    ...activities.map((activity): ConversationItem => ({ type: "tool", activity })),
+  ],
 ): SessionSummary {
   const capabilities = parseJson<AgentCapabilities | undefined>(
     row.agent_capabilities_json,
@@ -540,6 +596,7 @@ function toSummary(
     updatedAt: row.updated_at,
     messages,
     activities,
+    conversation,
     configOptions: [],
     pendingPermissions: [],
   };
@@ -739,16 +796,81 @@ export function getPersistedSession(id: string) {
     `)
     .all(id) as ActivityRow[];
 
+  const messageItems = messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.created_at,
+  }));
+  const messageById = new Map(messageItems.map((message) => [message.id, message]));
+  const activityById = new Map(activities.map((activity) => [activity.id, activity]));
+  const conversationRows = db.prepare(`
+    SELECT item_type, item_id
+    FROM conversation_items
+    WHERE session_id = ?
+    ORDER BY sequence
+  `).all(id) as ConversationRow[];
+  const conversation = conversationRows.flatMap((item): ConversationItem[] => {
+    if (item.item_type === "message") {
+      const message = messageById.get(item.item_id);
+      return message ? [{ type: "message", message }] : [];
+    }
+    const activity = activityById.get(item.item_id);
+    return activity ? [{ type: "tool", activity }] : [];
+  });
+
   return toSummary(
     row,
-    messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      createdAt: message.created_at,
-    })),
+    messageItems,
     activities,
+    conversation,
   );
+}
+
+export function persistConversationItem(
+  sessionId: string,
+  item: Exclude<ConversationItem, { type: "permission" }>,
+  sequence: number,
+) {
+  const itemId = item.type === "message" ? item.message.id : item.activity.id;
+  getDatabase().prepare(`
+    INSERT INTO conversation_items (session_id, item_type, item_id, sequence)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(session_id, item_type, item_id) DO UPDATE SET
+      sequence = excluded.sequence
+  `).run(sessionId, item.type, itemId, sequence);
+}
+
+export function persistConversationMessage(
+  sessionId: string,
+  message: ChatMessage,
+  messageSequence: number,
+  conversationSequence: number,
+) {
+  getDatabase().transaction(() => {
+    persistMessage(sessionId, message, messageSequence);
+    persistConversationItem(
+      sessionId,
+      { type: "message", message },
+      conversationSequence,
+    );
+  })();
+}
+
+export function persistConversationActivity(
+  sessionId: string,
+  activity: ToolActivity,
+  activitySequence: number,
+  conversationSequence: number,
+) {
+  getDatabase().transaction(() => {
+    persistActivity(sessionId, activity, activitySequence);
+    persistConversationItem(
+      sessionId,
+      { type: "tool", activity },
+      conversationSequence,
+    );
+  })();
 }
 
 export function persistMessage(
@@ -807,14 +929,21 @@ export function replaceSessionContent(
   sessionId: string,
   messages: ChatMessage[],
   activities: ToolActivity[],
+  conversation: ConversationItem[],
 ) {
   const db = getDatabase();
   db.transaction(() => {
     db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
     db.prepare("DELETE FROM activities WHERE session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM conversation_items WHERE session_id = ?").run(sessionId);
     messages.forEach((message, index) => persistMessage(sessionId, message, index));
     activities.forEach((activity, index) =>
       persistActivity(sessionId, activity, index),
     );
+    conversation.forEach((item, index) => {
+      if (item.type !== "permission") {
+        persistConversationItem(sessionId, item, index);
+      }
+    });
   })();
 }

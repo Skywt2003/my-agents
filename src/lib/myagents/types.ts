@@ -114,6 +114,11 @@ export type PermissionRequest = {
   options: PermissionOption[];
 };
 
+export type ConversationItem =
+  | { type: "message"; message: ChatMessage }
+  | { type: "tool"; activity: ToolActivity }
+  | { type: "permission"; permission: PermissionRequest };
+
 export type SessionTitleMode = "default" | "custom";
 
 export type SessionSummary = {
@@ -135,6 +140,7 @@ export type SessionSummary = {
   updatedAt: string;
   messages: ChatMessage[];
   activities: ToolActivity[];
+  conversation: ConversationItem[];
   configOptions: SessionConfigOption[];
   pendingPermissions: PermissionRequest[];
   error?: string;

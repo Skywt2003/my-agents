@@ -1,5 +1,3 @@
-import "server-only";
-
 import {
   spawn,
   type ChildProcessWithoutNullStreams,
@@ -23,6 +21,7 @@ import type {
   AgentCapabilities,
   AgentId,
   ChatMessage,
+  ConversationItem,
   PermissionRequest,
   SessionProject,
   SessionSource,
@@ -40,6 +39,8 @@ import {
   getPersistedSession,
   listPersistedSessions,
   persistActivity,
+  persistConversationActivity,
+  persistConversationMessage,
   reconcileDiscoveredSessions,
   persistMessage,
   persistSession,
@@ -74,6 +75,7 @@ type SessionRuntime = {
   updatedAt: string;
   messages: ChatMessage[];
   activities: Map<string, ToolActivity>;
+  conversation: ConversationItem[];
   configOptions: SessionConfigOption[];
   permissions: Map<string, PendingPermission>;
   listeners: Set<Listener>;
@@ -81,6 +83,7 @@ type SessionRuntime = {
   connection: ClientConnection;
   capabilities: AgentCapabilities;
   hydrating: boolean;
+  persisted: boolean;
   error?: string;
 };
 
@@ -93,7 +96,7 @@ type OpenAgent = {
 };
 
 type RuntimeStore = {
-  version: 5;
+  version: 7;
   sessions: Map<string, SessionRuntime>;
   activations: Map<string, Promise<SessionRuntime>>;
   sync: Promise<Partial<Record<AgentId, string>>> | null;
@@ -104,23 +107,24 @@ declare global {
 }
 
 const previousStore = globalThis.__myAgentsRuntimeStore;
-if (previousStore && previousStore.version !== 5) {
+if (previousStore && previousStore.version !== 7) {
   for (const session of previousStore.sessions.values()) {
     session.connection.close();
     session.process.kill();
   }
 }
 const store =
-  previousStore?.version === 5
+  previousStore?.version === 7
     ? previousStore
     : (globalThis.__myAgentsRuntimeStore = {
-        version: 5,
+        version: 7,
         sessions: new Map(),
         activations: new Map(),
         sync: null,
       });
 
 function serialize(runtime: SessionRuntime): SessionSummary {
+  const cached = runtime.hydrating ? getPersistedSession(runtime.id) : null;
   return {
     id: runtime.id,
     acpSessionId: runtime.acpSessionId,
@@ -141,8 +145,9 @@ function serialize(runtime: SessionRuntime): SessionSummary {
       runtime.capabilities.loadSession || runtime.capabilities.resumeSession,
     createdAt: runtime.createdAt,
     updatedAt: runtime.updatedAt,
-    messages: runtime.messages,
-    activities: Array.from(runtime.activities.values()),
+    messages: cached?.messages ?? runtime.messages,
+    activities: cached?.activities ?? Array.from(runtime.activities.values()),
+    conversation: cached?.conversation ?? runtime.conversation,
     configOptions: runtime.configOptions,
     pendingPermissions: Array.from(runtime.permissions.values()).map(
       ({ request }) => request,
@@ -153,6 +158,7 @@ function serialize(runtime: SessionRuntime): SessionSummary {
 
 function persistRuntime(runtime: SessionRuntime) {
   persistSession(serialize(runtime));
+  runtime.persisted = true;
 }
 
 function publish(runtime: SessionRuntime, event: SessionStreamEvent) {
@@ -189,6 +195,7 @@ function handlePermission(
     };
 
     runtime.permissions.set(id, { request, resolve });
+    runtime.conversation.push({ type: "permission", permission: request });
     publish(runtime, { type: "permission", permission: request });
   });
 }
@@ -203,18 +210,34 @@ function upsertMessage(
   if (existing) {
     existing.content += text;
   } else {
-    runtime.messages.push({
+    const message: ChatMessage = {
       id: messageId,
       role,
       content: text,
       createdAt: new Date().toISOString(),
-    });
+    };
+    runtime.messages.push(message);
+    runtime.conversation.push({ type: "message", message });
   }
   runtime.updatedAt = new Date().toISOString();
 
   if (!runtime.hydrating) {
     const message = runtime.messages.find((item) => item.id === messageId)!;
-    persistMessage(runtime.id, message, runtime.messages.indexOf(message));
+    if (existing) {
+      persistMessage(runtime.id, message, runtime.messages.indexOf(message));
+    } else {
+      const item = runtime.conversation.find(
+        (entry) => entry.type === "message" && entry.message.id === messageId,
+      );
+      if (item?.type === "message") {
+        persistConversationMessage(
+          runtime.id,
+          message,
+          runtime.messages.indexOf(message),
+          runtime.conversation.indexOf(item),
+        );
+      }
+    }
     persistRuntime(runtime);
   }
 }
@@ -235,9 +258,29 @@ function handleToolUpdate(runtime: SessionRuntime, update: SessionUpdate) {
     status: update.status ?? previous?.status ?? "in_progress",
   };
   runtime.activities.set(activity.id, activity);
+  if (previous) {
+    const index = runtime.conversation.findIndex(
+      (item) => item.type === "tool" && item.activity.id === activity.id,
+    );
+    if (index >= 0) runtime.conversation[index] = { type: "tool", activity };
+  } else {
+    runtime.conversation.push({ type: "tool", activity });
+  }
   if (!runtime.hydrating) {
     const activities = Array.from(runtime.activities.values());
-    persistActivity(runtime.id, activity, activities.indexOf(activity));
+    if (previous) {
+      persistActivity(runtime.id, activity, activities.indexOf(activity));
+    } else {
+      const item = runtime.conversation.at(-1);
+      if (item?.type === "tool") {
+        persistConversationActivity(
+          runtime.id,
+          activity,
+          activities.indexOf(activity),
+          runtime.conversation.length - 1,
+        );
+      }
+    }
   }
   publish(runtime, { type: "tool", activity });
 }
@@ -339,6 +382,9 @@ async function openAgent(
     cwd,
     env: {
       ...process.env,
+      ...(agent.command === process.execPath
+        ? { ELECTRON_RUN_AS_NODE: "1" }
+        : {}),
       ...agent.env,
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -426,6 +472,7 @@ export async function validateWorkingDirectory(cwd: string) {
 export async function createSession(
   project: SessionProject,
   agentId: AgentId = "codex",
+  { persist = true }: { persist?: boolean } = {},
 ): Promise<SessionSummary> {
   const cwd = project.path;
   await validateWorkingDirectory(cwd);
@@ -461,6 +508,7 @@ export async function createSession(
       updatedAt: now,
       messages: [],
       activities: new Map(),
+      conversation: [],
       configOptions: response.configOptions ?? [],
       permissions: new Map(),
       listeners: new Set(),
@@ -468,9 +516,10 @@ export async function createSession(
       connection: opened.connection,
       capabilities: opened.capabilities,
       hydrating: false,
+      persisted: persist,
     };
     store.sessions.set(id, runtime);
-    persistRuntime(runtime);
+    if (persist) persistRuntime(runtime);
     watchConnection(runtime);
     return serialize(runtime);
   } catch (error) {
@@ -532,6 +581,7 @@ async function activatePersistedSession(id: string) {
           ? []
           : saved.activities.map((activity) => [activity.id, activity]),
       ),
+      conversation: loadsHistory ? [] : [...saved.conversation],
       configOptions: [],
       permissions: new Map(),
       listeners: new Set(),
@@ -539,6 +589,7 @@ async function activatePersistedSession(id: string) {
       connection: opened.connection,
       capabilities: opened.capabilities,
       hydrating: loadsHistory,
+      persisted: true,
     };
     holder.runtime = runtime;
     store.sessions.set(id, runtime);
@@ -564,6 +615,7 @@ async function activatePersistedSession(id: string) {
           runtime.id,
           runtime.messages,
           Array.from(runtime.activities.values()),
+          runtime.conversation,
         );
       }
       persistRuntime(runtime);
@@ -685,6 +737,31 @@ export async function getSession(id: string) {
   }
 }
 
+export async function reloadSession(id: string) {
+  const active = store.sessions.get(id);
+  if (
+    active &&
+    !active.connection.signal.aborted &&
+    !active.persisted
+  ) {
+    return serialize(active);
+  }
+  if (
+    active &&
+    !active.connection.signal.aborted &&
+    (active.status === "running" ||
+      active.status === "connecting")
+  ) {
+    return serialize(active);
+  }
+  if (active) {
+    store.sessions.delete(id);
+    active.connection.close();
+    active.process.kill();
+  }
+  return getSession(id);
+}
+
 export function updateSessionTitlePreference(
   id: string,
   titleMode: SessionSummary["titleMode"],
@@ -716,7 +793,7 @@ export function updateSessionTitlePreference(
   return saved;
 }
 
-function requireActiveSession(id: string) {
+function requireActiveSession(id: string): SessionRuntime {
   const runtime = store.sessions.get(id);
   if (!runtime) throw new Error("Session is not active.");
   return runtime;
@@ -744,8 +821,16 @@ export async function promptSession(id: string, text: string) {
     content: text,
     createdAt: new Date().toISOString(),
   };
+  if (!runtime.persisted) persistRuntime(runtime);
   runtime.messages.push(userMessage);
-  persistMessage(runtime.id, userMessage, runtime.messages.length - 1);
+  const userItem: ConversationItem = { type: "message", message: userMessage };
+  runtime.conversation.push(userItem);
+  persistConversationMessage(
+    runtime.id,
+    userMessage,
+    runtime.messages.length - 1,
+    runtime.conversation.length - 1,
+  );
   if (runtime.title === "New session") {
     runtime.title = text.length > 38 ? `${text.slice(0, 38).trim()}…` : text;
   }
@@ -836,6 +921,10 @@ export function resolvePermission(
       : { outcome: "cancelled" },
   });
   runtime.permissions.delete(permissionId);
+  runtime.conversation = runtime.conversation.filter(
+    (item) =>
+      item.type !== "permission" || item.permission.id !== permissionId,
+  );
   publish(runtime, { type: "permission_resolved", permissionId });
 }
 
