@@ -110,7 +110,8 @@ const MODEL_OPTIONS_CACHE_MAX_ENTRIES = 50;
 const REGISTRY_PAGE_SIZE = 10;
 const SIDEBAR_MIN_WIDTH = 220;
 const SIDEBAR_MAX_WIDTH = 480;
-const SIDEBAR_COLLAPSED_WIDTH = 48;
+const SIDEBAR_COLLAPSED_WIDTH =
+  document.documentElement.dataset.platform === "darwin" ? 80 : 48;
 const SIDEBAR_HORIZONTAL_PADDING = 24;
 const TERMINAL_MIN_HEIGHT = 180;
 const TERMINAL_MAX_HEIGHT = 720;
@@ -813,17 +814,18 @@ export function MyAgentsApp() {
 
   return (
     <main
-      className="grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background transition-[grid-template-columns] duration-200"
+      className="macos-window-surface grid h-dvh min-h-[540px] grid-rows-[minmax(0,1fr)] overflow-hidden bg-background transition-[grid-template-columns] duration-200"
       style={{
         gridTemplateColumns: `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px minmax(0, 1fr)`,
       }}
     >
       <aside
         aria-label="Session sidebar"
-        className="relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-sidebar"
+        className="macos-sidebar-surface relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-sidebar"
       >
         <div className={cn(
-          "flex h-12 shrink-0 items-center gap-2",
+          "macos-titlebar-drag-region flex h-12 shrink-0 items-center gap-2",
+          sidebarCollapsed && "macos-titlebar-drag-region-collapsed",
           sidebarCollapsed ? "justify-center px-2" : "px-5",
         )}>
           {!sidebarCollapsed ? (
@@ -913,7 +915,7 @@ export function MyAgentsApp() {
         ) : null}
       </aside>
 
-      <section className="flex min-h-0 min-w-0 flex-col">
+      <section className="macos-content-surface flex min-h-0 min-w-0 flex-col">
         {loading && !selected ? (
           <NoSession loading error={pageError} onCreate={() => openNewSession()} />
         ) : creatingSessionView || !selected ? (

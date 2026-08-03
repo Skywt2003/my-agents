@@ -145,3 +145,42 @@ html[data-font="serif"] {
     @apply font-sans;
   }
 }
+
+html[data-platform="darwin"],
+html[data-platform="darwin"] body,
+html[data-platform="darwin"] #root {
+  background: transparent;
+}
+
+html[data-platform="darwin"] .macos-window-surface {
+  background-color: transparent;
+}
+
+html[data-platform="darwin"] .macos-sidebar-surface {
+  background-color: color-mix(in oklab, var(--sidebar) 72%, transparent);
+}
+
+html[data-platform="darwin"].dark .macos-sidebar-surface {
+  background-color: color-mix(in oklab, var(--sidebar) 62%, transparent);
+}
+
+html[data-platform="darwin"] .macos-content-surface {
+  background-color: var(--background);
+}
+
+html[data-platform="darwin"] .macos-titlebar-drag-region {
+  app-region: drag;
+  padding-left: 82px;
+}
+
+html[data-platform="darwin"] .macos-titlebar-drag-region button,
+html[data-platform="darwin"] .macos-titlebar-drag-region a,
+html[data-platform="darwin"] .macos-titlebar-drag-region input {
+  app-region: no-drag;
+}
+
+html[data-platform="darwin"] .macos-titlebar-drag-region-collapsed {
+  height: 80px;
+  padding-top: 32px;
+  padding-left: 0.5rem;
+}

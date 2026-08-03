@@ -10,13 +10,21 @@ function performCleanup() {
 }
 
 async function createWindow() {
+  const isMac = process.platform === "darwin";
+
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
     minWidth: 900,
     minHeight: 540,
     show: false,
-    backgroundColor: "#ffffff",
+    backgroundColor: isMac ? "#00000000" : "#ffffff",
+    ...(isMac ? {
+      titleBarStyle: "hiddenInset" as const,
+      trafficLightPosition: { x: 14, y: 16 },
+      vibrancy: "sidebar" as const,
+      visualEffectState: "followWindow" as const,
+    } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,

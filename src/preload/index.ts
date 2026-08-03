@@ -6,6 +6,8 @@ import type {
   TerminalStreamEvent,
 } from "@/lib/myagents/types";
 
+document.documentElement.dataset.platform = process.platform;
+
 let subscriptionSequence = 0;
 
 function nextSubscriptionId(prefix: string) {
