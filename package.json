@@ -15,6 +15,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:sentry": "node scripts/sentry-smoke-test.mjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "pnpm build && node tests/e2e/run.mjs",
@@ -23,6 +24,8 @@
   "dependencies": {
     "@agentclientprotocol/codex-acp": "github:Skywt2003/codex-acp#4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc",
     "@agentclientprotocol/sdk": "^1.3.0",
+    "@sentry/electron": "7.16.0",
+    "@sentry/react": "10.67.0",
     "better-sqlite3": "^13.0.1",
     "node-pty": "^1.1.0"
   },
@@ -32,6 +35,7 @@
     "@fontsource-variable/noto-serif-sc": "^5.3.0",
     "@fontsource-variable/source-serif-4": "^5.3.0",
     "@playwright/test": "^1.62.1",
+    "@sentry/vite-plugin": "5.4.0",
     "@streamdown/cjk": "^1.0.3",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",

@@ -9,20 +9,35 @@ import {
   initializeAppearance,
   ThemeProvider,
 } from "@/components/theme-provider";
+import {
+  initializeRendererTelemetry,
+  type RendererTelemetry,
+} from "@/renderer/telemetry";
 
 import "./globals.css";
 
 document.documentElement.dataset.platform = window.myagents.platform;
 initializeAppearance();
 
-const root = document.getElementById("root");
-if (!root) throw new Error("Renderer root element is missing.");
+async function bootstrap() {
+  const root = document.getElementById("root");
+  if (!root) throw new Error("Renderer root element is missing.");
 
-createRoot(root).render(
-  <StrictMode>
-    <ThemeProvider defaultTheme="light">
-      <RemoveButtonTooltips />
-      <MyAgentsApp />
-    </ThemeProvider>
-  </StrictMode>,
-);
+  let telemetry: RendererTelemetry = {};
+  try {
+    telemetry = await initializeRendererTelemetry();
+  } catch (error) {
+    console.error("Failed to initialize renderer telemetry.", error);
+  }
+
+  createRoot(root, telemetry).render(
+    <StrictMode>
+      <ThemeProvider defaultTheme="light">
+        <RemoveButtonTooltips />
+        <MyAgentsApp />
+      </ThemeProvider>
+    </StrictMode>,
+  );
+}
+
+void bootstrap();

@@ -2,10 +2,16 @@ import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
 import { ipcMain } from "electron";
 
 import { createDesktopService } from "@/lib/myagents/desktop-service";
+import type { TelemetryMode } from "@/lib/telemetry/types";
 import type {
   SessionStreamEvent,
   TerminalStreamEvent,
 } from "@/lib/myagents/types";
+import {
+  getTelemetrySettings,
+  instrumentIpc,
+  setTelemetryMode,
+} from "./telemetry";
 
 type Cleanup = () => void;
 
@@ -25,9 +31,16 @@ export function registerIpc(mainWindow: BrowserWindow) {
   ) {
     ipcMain.handle(channel, (event, ...args) => {
       assertSender(event);
-      return listener(event, ...args as never[]);
+      return instrumentIpc(channel, args, () =>
+        listener(event, ...args as never[]),
+      );
     });
   }
+
+  handle("telemetry:get-settings", () => getTelemetrySettings());
+  handle("telemetry:set-mode", (_event, mode: TelemetryMode) =>
+    setTelemetryMode(mode),
+  );
 
   handle("sessions:list", (_event, sync = false) =>
     service.sessions.list(Boolean(sync)),
@@ -145,6 +158,8 @@ export function registerIpc(mainWindow: BrowserWindow) {
     for (const cleanup of terminalSubscriptions.values()) cleanup();
     terminalSubscriptions.clear();
     service.shutdown();
+    ipcMain.removeHandler("telemetry:get-settings");
+    ipcMain.removeHandler("telemetry:set-mode");
     ipcMain.removeHandler("sessions:list");
     ipcMain.removeHandler("sessions:get");
     ipcMain.removeHandler("sessions:reload");

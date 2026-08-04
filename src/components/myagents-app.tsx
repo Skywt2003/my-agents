@@ -60,6 +60,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FontSettings } from "@/components/font-settings";
 import { ThemeSettings } from "@/components/theme-toggle";
 import { TerminalPanel } from "@/components/terminal-panel";
+import { TelemetrySettings } from "@/components/telemetry-settings";
 import type {
   RegistryAgentView,
   SelectSessionConfigOption,
@@ -1322,6 +1323,11 @@ function AgentSettingsDialog({
             <Tabs.Tab value="appearance" className="-mb-px border-b-2 border-transparent px-3 pb-2.5 pt-1 text-sm font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-active:border-foreground data-active:text-foreground">
               Appearance
             </Tabs.Tab>
+            {window.myagents.telemetry && (
+              <Tabs.Tab value="privacy" className="-mb-px border-b-2 border-transparent px-3 pb-2.5 pt-1 text-sm font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-active:border-foreground data-active:text-foreground">
+                Privacy
+              </Tabs.Tab>
+            )}
           </Tabs.List>
 
           <Tabs.Panel value="agents" className="outline-none">
@@ -1484,6 +1490,11 @@ function AgentSettingsDialog({
               </section>
             </div>
           </Tabs.Panel>
+          {window.myagents.telemetry && (
+            <Tabs.Panel value="privacy" className="py-6 outline-none">
+              <TelemetrySettings api={window.myagents.telemetry} />
+            </Tabs.Panel>
+          )}
         </Tabs.Root>
       </DialogContent>
     </Dialog>

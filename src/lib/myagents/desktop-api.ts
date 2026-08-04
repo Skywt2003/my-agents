@@ -10,6 +10,7 @@ import type {
   TerminalInfo,
   TerminalStreamEvent,
 } from "@/lib/myagents/types";
+import type { TelemetryApi } from "@/lib/telemetry/types";
 
 export type SessionsSnapshot = {
   sessions: SessionSummary[];
@@ -28,6 +29,7 @@ export type AgentTestResult = {
 export type DesktopApi = {
   transport: "electron" | "browser";
   platform: NodeJS.Platform | "browser";
+  telemetry?: TelemetryApi;
   sessions: {
     list(sync?: boolean): Promise<SessionsSnapshot>;
     get(id: string): Promise<SessionSummary>;

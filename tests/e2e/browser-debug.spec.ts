@@ -14,6 +14,12 @@ test("preserves the core workflow through browser RPC", async ({ page }) => {
   await expect(
     page.evaluate(() => window.myagents.transport),
   ).resolves.toBe("browser");
+  await expect(
+    page.evaluate(() => window.myagents.telemetry),
+  ).resolves.toBeUndefined();
   await expect(page).not.toHaveURL(/token=/);
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await expect(page.getByRole("tab", { name: "Privacy" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close" }).click();
   await exerciseCoreWorkflow(page);
 });

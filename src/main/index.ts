@@ -4,6 +4,14 @@ import { app, BrowserWindow, shell } from "electron";
 let mainWindow: BrowserWindow | null = null;
 let cleanup = () => {};
 
+process.env.MYAGENTS_DATA_DIR ??= app.getPath("userData");
+process.env.MYAGENTS_APP_ROOT ??= app.getAppPath();
+const telemetryReady = import("./telemetry")
+  .then(({ initializeMainTelemetry }) => initializeMainTelemetry())
+  .catch((error) => {
+    console.error("Failed to initialize telemetry.", error);
+  });
+
 function performCleanup() {
   cleanup();
   cleanup = () => {};
@@ -60,8 +68,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
-  process.env.MYAGENTS_DATA_DIR ??= app.getPath("userData");
-  process.env.MYAGENTS_APP_ROOT ??= app.getAppPath();
+  await telemetryReady;
   await createWindow();
 
   app.on("activate", () => {

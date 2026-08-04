@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test, _electron as electron } from "@playwright/test";
 
@@ -6,6 +6,7 @@ import { exerciseCoreWorkflow } from "./core-workflow";
 
 const testDataDirectory = "/tmp/myagents-playwright-data";
 const testWorkspace = "/tmp/myagents-playwright-workspace";
+const telemetryDataDirectory = "/tmp/myagents-playwright-telemetry-data";
 
 test("excludes browser debug code from the Electron renderer bundle", async () => {
   const assetsDirectory = resolve("out/renderer/assets");
@@ -56,8 +57,53 @@ test("preserves the core Electron workflow", async () => {
       documentPlatform: process.platform,
     });
     await expect(page.getByText("Browser debug", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await page.getByRole("tab", { name: "Privacy" }).click();
+    await expect(page.getByRole("radio", { name: "Off" })).toBeChecked();
+    await page.getByRole("radio", { name: "Anonymous" }).click();
+    await expect(page.getByRole("radio", { name: "Anonymous" })).toBeChecked();
+    await page.getByRole("button", { name: "Close" }).click();
     await exerciseCoreWorkflow(page);
   } finally {
     await electronApp.close();
+  }
+});
+
+test("initializes each enabled Sentry policy in both Electron processes", async () => {
+  for (const mode of ["anonymous", "developer"] as const) {
+    const dataDirectory = `${telemetryDataDirectory}-${mode}`;
+    await rm(dataDirectory, { recursive: true, force: true });
+    await mkdir(dataDirectory, { recursive: true });
+    await writeFile(
+      resolve(dataDirectory, "privacy-settings.json"),
+      JSON.stringify({ version: 1, telemetryMode: mode }),
+      "utf8",
+    );
+
+    const executablePath = process.env.MYAGENTS_E2E_EXECUTABLE;
+    const electronApp = await electron.launch({
+      ...(executablePath ? { executablePath } : {}),
+      args: executablePath ? ["--no-sandbox"] : ["--no-sandbox", "."],
+      env: {
+        ...process.env,
+        MYAGENTS_DATA_DIR: dataDirectory,
+        MYAGENTS_DISABLE_DEFAULT_AGENTS: "1",
+        MYAGENTS_SENTRY_DSN: "http://public@127.0.0.1:9/1",
+      },
+    });
+    const page = await electronApp.firstWindow();
+
+    try {
+      await expect(page.evaluate(() =>
+        window.myagents.telemetry?.getSettings()
+      )).resolves.toMatchObject({
+        activeMode: mode,
+        configured: true,
+        mode,
+        restartRequired: false,
+      });
+    } finally {
+      await electronApp.close();
+    }
   }
 });

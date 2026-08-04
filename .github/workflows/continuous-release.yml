@@ -99,6 +99,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build application
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          SENTRY_ENVIRONMENT: production
+          SENTRY_RELEASE: my-agents@${{ github.sha }}
         run: pnpm build
 
       - name: Package application

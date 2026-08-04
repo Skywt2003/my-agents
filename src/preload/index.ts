@@ -16,6 +16,10 @@ function nextSubscriptionId(prefix: string) {
 const api: DesktopApi = {
   transport: "electron",
   platform: process.platform,
+  telemetry: {
+    getSettings: () => ipcRenderer.invoke("telemetry:get-settings"),
+    setMode: (mode) => ipcRenderer.invoke("telemetry:set-mode", mode),
+  },
   sessions: {
     list: (sync = false) => ipcRenderer.invoke("sessions:list", sync),
     get: (id) => ipcRenderer.invoke("sessions:get", id),
