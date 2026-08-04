@@ -1,4 +1,5 @@
 import {
+  configureCodexCommand,
   fetchAgentRegistry,
   installRegistryAgent,
   listInstalledAgents,
@@ -16,6 +17,7 @@ import {
   setSessionConfigOption,
   shutdownAgentRuntime,
   shutdownRuntime,
+  testAgentSession,
   updateSessionTitlePreference,
   validateWorkingDirectory,
 } from "@/lib/acp/runtime";
@@ -31,6 +33,7 @@ import type {
 import {
   closeDatabase,
   createProject,
+  dataDirectory,
   getProject,
   listProjects,
 } from "@/lib/persistence/database";
@@ -119,6 +122,13 @@ export function createDesktopService() {
         shutdownAgentRuntime(id);
         await removeAgent(id);
         return listInstalledAgents();
+      },
+      async configureCodex(command: string) {
+        return configureCodexCommand(command);
+      },
+      async test(id: string) {
+        const message = await testAgentSession(id, dataDirectory());
+        return { message, agents: listInstalledAgents() };
       },
     },
     terminals: {

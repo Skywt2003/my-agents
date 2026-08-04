@@ -303,6 +303,12 @@ webSocketServer.on("connection", (webSocket) => {
         );
       case "agents.remove":
         return service.agents.remove(requiredString(parameters, 0, "Agent ID", 200));
+      case "agents.configureCodex":
+        return service.agents.configureCodex(
+          requiredString(parameters, 0, "Codex command", 4_096),
+        );
+      case "agents.test":
+        return service.agents.test(requiredString(parameters, 0, "Agent ID", 200));
       case "terminals.create":
         return service.terminals.create(
           requiredString(parameters, 0, "Working directory"),

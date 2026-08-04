@@ -24,7 +24,7 @@ await writeFile(
         distribution: {
           npx: {
             package: "node",
-            args: [resolve("tests/fixtures/fake-acp-agent.mjs")],
+            args: [resolve("tests/fixtures/minimal-acp-agent.mjs")],
           },
         },
       },

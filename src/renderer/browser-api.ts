@@ -176,6 +176,8 @@ const browserApi: DesktopApi = {
     registry: () => request("agents.registry"),
     install: (registryId) => request("agents.install", [registryId]),
     remove: (id) => request("agents.remove", [id]),
+    configureCodex: (command) => request("agents.configureCodex", [command]),
+    test: (id) => request("agents.test", [id]),
   },
   terminals: {
     create: (cwd, cols, rows) =>

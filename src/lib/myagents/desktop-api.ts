@@ -20,6 +20,11 @@ export type SessionsSnapshot = {
 
 export type RegistryAgentView = RegistryAgent & { installed: boolean };
 
+export type AgentTestResult = {
+  message: string;
+  agents: AgentDescriptor[];
+};
+
 export type DesktopApi = {
   transport: "electron" | "browser";
   platform: NodeJS.Platform | "browser";
@@ -58,6 +63,8 @@ export type DesktopApi = {
     registry(): Promise<RegistryAgentView[]>;
     install(registryId: string): Promise<AgentDescriptor[]>;
     remove(id: string): Promise<AgentDescriptor[]>;
+    configureCodex(command: string): Promise<AgentDescriptor[]>;
+    test(id: string): Promise<AgentTestResult>;
   };
   terminals: {
     create(cwd: string, cols?: number, rows?: number): Promise<TerminalInfo>;

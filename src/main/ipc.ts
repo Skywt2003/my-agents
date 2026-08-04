@@ -99,6 +99,10 @@ export function registerIpc(mainWindow: BrowserWindow) {
   handle("agents:remove", (_event, id: string) =>
     service.agents.remove(id),
   );
+  handle("agents:configure-codex", (_event, command: string) =>
+    service.agents.configureCodex(command),
+  );
+  handle("agents:test", (_event, id: string) => service.agents.test(id));
 
   handle(
     "terminals:create",
@@ -155,6 +159,8 @@ export function registerIpc(mainWindow: BrowserWindow) {
     ipcMain.removeHandler("agents:registry");
     ipcMain.removeHandler("agents:install");
     ipcMain.removeHandler("agents:remove");
+    ipcMain.removeHandler("agents:configure-codex");
+    ipcMain.removeHandler("agents:test");
     ipcMain.removeHandler("terminals:create");
     ipcMain.removeHandler("terminals:close");
     ipcMain.removeHandler("terminals:write");

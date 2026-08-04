@@ -1161,6 +1161,13 @@ function AgentSettingsDialog({
   const [registryError, setRegistryError] = useState<string | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<
+    string,
+    { ok: boolean; message: string }
+  >>({});
+  const [codexCommand, setCodexCommand] = useState("codex");
+  const [savingCodexCommand, setSavingCodexCommand] = useState(false);
   const [confirmingRemovalId, setConfirmingRemovalId] = useState<string | null>(
     null,
   );
@@ -1178,7 +1185,12 @@ function AgentSettingsDialog({
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
-    if (nextOpen) loadRegistry();
+    if (nextOpen) {
+      setCodexCommand(
+        agents.find(({ id }) => id === "codex")?.displayCommand ?? "codex",
+      );
+      loadRegistry();
+    }
   }
 
   const filteredRegistry = useMemo(() => {
@@ -1248,6 +1260,51 @@ function AgentSettingsDialog({
     }
   }
 
+  async function saveCodexCommand() {
+    setSavingCodexCommand(true);
+    setRegistryError(null);
+    try {
+      const nextAgents = await window.myagents.agents.configureCodex(codexCommand);
+      onAgentsChanged(nextAgents);
+      setCodexCommand(
+        nextAgents.find(({ id }) => id === "codex")?.displayCommand ?? "codex",
+      );
+      setTestResults((current) => {
+        const next = { ...current };
+        delete next.codex;
+        return next;
+      });
+    } catch (error) {
+      setRegistryError(getError(error));
+    } finally {
+      setSavingCodexCommand(false);
+    }
+  }
+
+  async function testAgent(id: string) {
+    setTestingId(id);
+    setTestResults((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    try {
+      const result = await window.myagents.agents.test(id);
+      onAgentsChanged(result.agents);
+      setTestResults((current) => ({
+        ...current,
+        [id]: { ok: true, message: result.message },
+      }));
+    } catch (error) {
+      setTestResults((current) => ({
+        ...current,
+        [id]: { ok: false, message: getError(error) },
+      }));
+    } finally {
+      setTestingId(null);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Open settings" />}>
@@ -1278,69 +1335,125 @@ function AgentSettingsDialog({
                         No Agents added yet.
                       </p>
                     )}
-                    {agents.map((agent) => (
-                      <div key={agent.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
-                        <span className={cn("size-2 shrink-0 rounded-full", agent.available ? "bg-emerald-500" : "bg-destructive")} aria-label={agent.available ? "Available" : "Unavailable"} role="img" />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold">{agent.name}</p>
-                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                            <p className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
-                              {agent.displayCommand}
-                            </p>
-                            {agent.adapter ? (
-                              <Badge
-                                variant="outline"
-                                className="h-4 px-1.5 font-mono text-[9px] font-normal text-muted-foreground"
-                                aria-label={`Adapter: ${agent.adapter}`}
+                    {agents.map((agent) => {
+                      const testResult = testResults[agent.id];
+                      return (
+                        <div key={agent.id} className="rounded-lg border px-3 py-2.5">
+                          <div className="flex items-center gap-3">
+                            <span className={cn("size-2 shrink-0 rounded-full", agent.available ? "bg-emerald-500" : "bg-destructive")} aria-label={agent.available ? "Available" : "Unavailable"} role="img" />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-semibold">{agent.name}</p>
+                              <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                                <p className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                                  {agent.displayCommand}
+                                </p>
+                                {agent.adapter ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="h-4 px-1.5 font-mono text-[9px] font-normal text-muted-foreground"
+                                    aria-label={`Adapter: ${agent.adapter}`}
+                                  >
+                                    {agent.adapter}
+                                  </Badge>
+                                ) : null}
+                              </div>
+                            </div>
+                            {agent.capabilities && <span className="text-[10px] text-muted-foreground">{agent.capabilities.loadSession ? "load" : agent.capabilities.resumeSession ? "resume" : "new only"}{agent.capabilities.listSessions ? " · list" : ""}</span>}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={testingId !== null || savingCodexCommand}
+                              onClick={() => void testAgent(agent.id)}
+                              aria-label={`Test ${agent.name}`}
+                            >
+                              {testingId === agent.id && <LoaderCircle className="animate-spin" />}
+                              Test
+                            </Button>
+                            {confirmingRemovalId === agent.id ? (
+                              <div
+                                className="flex shrink-0 items-center gap-1"
+                                role="group"
+                                aria-label={`Confirm removing ${agent.name}`}
                               >
-                                {agent.adapter}
-                              </Badge>
-                            ) : null}
+                                <span className="mr-1 text-[10px] text-muted-foreground">
+                                  Remove?
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={removingId !== null}
+                                  onClick={() => setConfirmingRemovalId(null)}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
+                                  disabled={removingId !== null}
+                                  onClick={() => void deleteAgent(agent.id)}
+                                >
+                                  {removingId === agent.id && (
+                                    <LoaderCircle className="animate-spin" />
+                                  )}
+                                  Remove
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                disabled={removingId !== null}
+                                onClick={() => setConfirmingRemovalId(agent.id)}
+                                aria-label={`Remove ${agent.name}`}
+                              >
+                                <Trash2 />
+                              </Button>
+                            )}
                           </div>
-                        </div>
-                        {agent.capabilities && <span className="text-[10px] text-muted-foreground">{agent.capabilities.loadSession ? "load" : agent.capabilities.resumeSession ? "resume" : "new only"}{agent.capabilities.listSessions ? " · list" : ""}</span>}
-                        {confirmingRemovalId === agent.id ? (
-                          <div
-                            className="flex shrink-0 items-center gap-1"
-                            role="group"
-                            aria-label={`Confirm removing ${agent.name}`}
-                          >
-                            <span className="mr-1 text-[10px] text-muted-foreground">
-                              Remove?
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={removingId !== null}
-                              onClick={() => setConfirmingRemovalId(null)}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              disabled={removingId !== null}
-                              onClick={() => void deleteAgent(agent.id)}
-                            >
-                              {removingId === agent.id && (
-                                <LoaderCircle className="animate-spin" />
+                          {agent.id === "codex" && (
+                            <div className="mt-3 border-t pt-3">
+                              <Label htmlFor="codex-command" className="text-[11px]">
+                                Codex command
+                              </Label>
+                              <div className="mt-1.5 flex gap-2">
+                                <Input
+                                  id="codex-command"
+                                  value={codexCommand}
+                                  onChange={(event) => setCodexCommand(event.target.value)}
+                                  placeholder="codex or /absolute/path/to/codex"
+                                  className="h-8 font-mono text-xs"
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={savingCodexCommand || !codexCommand.trim()}
+                                  onClick={() => void saveCodexCommand()}
+                                >
+                                  {savingCodexCommand && <LoaderCircle className="animate-spin" />}
+                                  Save
+                                </Button>
+                              </div>
+                              <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+                                MyAgents uses this user-installed Codex executable through codex-acp.
+                              </p>
+                            </div>
+                          )}
+                          {testResult && (
+                            <p
+                              role={testResult.ok ? "status" : "alert"}
+                              className={cn(
+                                "mt-2 text-[10px] leading-4",
+                                testResult.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive",
                               )}
-                              Remove
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            disabled={removingId !== null}
-                            onClick={() => setConfirmingRemovalId(agent.id)}
-                            aria-label={`Remove ${agent.name}`}
-                          >
-                            <Trash2 />
-                          </Button>
-                        )}
-                      </div>
-                    ))}
+                            >
+                              {testResult.message}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </section>
 

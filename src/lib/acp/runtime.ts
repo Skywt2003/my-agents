@@ -105,6 +105,7 @@ type OpenAgent = {
   connection: ClientConnection;
   initialize: InitializeResponse;
   capabilities: AgentCapabilities;
+  stderrTail: () => string;
 };
 
 type RuntimeStore = {
@@ -447,6 +448,14 @@ function processError(error: unknown) {
     : "The ACP agent failed unexpectedly.";
 }
 
+function agentProcessError(opened: OpenAgent, error: unknown) {
+  const message = processError(error);
+  const detail = opened.stderrTail().trim();
+  return detail && message === "ACP connection closed"
+    ? `${opened.agent.name} ACP process exited: ${detail}`
+    : message;
+}
+
 function capabilitiesFromInitialize(
   initialize: InitializeResponse,
 ): AgentCapabilities {
@@ -492,6 +501,13 @@ async function openAgent(
   const spawnError = new Promise<never>((_, reject) => {
     child.once("error", reject);
   });
+  let exitDescription = "";
+  const processExit = new Promise<never>((_resolve, reject) => {
+    child.once("exit", (code, signal) => {
+      exitDescription = `${agent.name} ACP process exited (${signal ?? code ?? "unknown"}).`;
+      reject(new Error(exitDescription));
+    });
+  });
 
   const app = acp
     .client({ name: "MyAgents" })
@@ -514,8 +530,10 @@ async function openAgent(
   );
   const connection = app.connect(stream);
 
+  let stderr = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-4_096);
     if (process.env.NODE_ENV !== "production") {
       console.error(`[${agent.id}-acp:${label}] ${chunk.trim()}`);
     }
@@ -530,6 +548,7 @@ async function openAgent(
           clientInfo: { name: "MyAgents", version: "0.1.0" },
         }),
         spawnError,
+        processExit,
       ]),
       `${agent.name} ACP initialization`,
     );
@@ -540,12 +559,23 @@ async function openAgent(
     }
     const capabilities = capabilitiesFromInitialize(initialize);
     updateAgentHandshake(agent.id, capabilities);
-    return { agent, process: child, connection, initialize, capabilities };
+    return {
+      agent,
+      process: child,
+      connection,
+      initialize,
+      capabilities,
+      stderrTail: () => stderr,
+    };
   } catch (error) {
-    updateAgentError(agent.id, processError(error));
+    await new Promise<void>((resolveImmediate) => setImmediate(resolveImmediate));
+    const message = stderr.trim() && processError(error) === "ACP connection closed"
+      ? `${agent.name} ACP process exited: ${stderr.trim()}`
+      : exitDescription || processError(error);
+    updateAgentError(agent.id, message);
     connection.close(error);
     child.kill();
-    throw error;
+    throw new Error(message);
   }
 }
 
@@ -625,11 +655,49 @@ export async function createSession(
     watchConnection(runtime);
     return serialize(runtime);
   } catch (error) {
-    const message = processError(error);
+    const message = agentProcessError(opened, error);
     updateAgentError(agent.id, message);
     opened.connection.close(error);
     opened.process.kill();
     throw new Error(message);
+  }
+}
+
+export async function testAgentSession(agentId: AgentId, cwd: string) {
+  await validateWorkingDirectory(cwd);
+  const agent = requireInstalledAgent(agentId);
+  const opened = await openAgent(agent, cwd, () => undefined, "test");
+  let sessionId: string | undefined;
+
+  try {
+    const response = await withTimeout(
+      opened.connection.agent.request(acp.methods.agent.session.new, {
+        cwd,
+        mcpServers: [],
+      }),
+      `${agent.name} test session creation`,
+      60_000,
+    );
+    sessionId = response.sessionId;
+    if (!sessionId) throw new Error(`${agent.name} returned an invalid session ID.`);
+    updateAgentError(agent.id);
+    return `${agent.name} initialized and created a test session successfully.`;
+  } catch (error) {
+    const message = agentProcessError(opened, error);
+    updateAgentError(agent.id, message);
+    throw new Error(message);
+  } finally {
+    if (sessionId && opened.capabilities.closeSession) {
+      await withTimeout(
+        opened.connection.agent.request(acp.methods.agent.session.close, {
+          sessionId,
+        }),
+        `${agent.name} test session cleanup`,
+        5_000,
+      ).catch(() => {});
+    }
+    opened.connection.close();
+    opened.process.kill();
   }
 }
 

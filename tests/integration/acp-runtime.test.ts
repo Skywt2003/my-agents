@@ -16,6 +16,7 @@ import {
   setSessionConfigOption,
   shutdownRuntime,
   subscribe,
+  testAgentSession,
 } from "@/lib/acp/runtime";
 import type { SessionStreamEvent } from "@/lib/myagents/types";
 import {
@@ -29,6 +30,12 @@ const fixturePath = join(
   "..",
   "fixtures",
   "fake-acp-agent.mjs",
+);
+const minimalFixturePath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "fixtures",
+  "minimal-acp-agent.mjs",
 );
 
 let root: string;
@@ -94,6 +101,26 @@ afterEach(async () => {
 });
 
 describe("ACP runtime with a deterministic stdio agent", () => {
+  it("tests real session creation without persisting a MyAgents session", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [minimalFixturePath],
+      env: { FAKE_ACP_LOG: logPath },
+      source: "system",
+    });
+    await expect(testAgentSession("fake-agent", workspace)).resolves.toContain(
+      "created a test session successfully",
+    );
+
+    const methods = (await readLog()).map(({ method }) => method);
+    expect(methods).toEqual(
+      expect.arrayContaining(["initialize", "session/new", "session/close"]),
+    );
+    expect((await listSessions()).sessions).toHaveLength(0);
+  });
+
   it("creates, streams, persists, configures, and closes a session", async () => {
     const session = await createSession(
       { id: "project-1", name: "Workspace", path: workspace },

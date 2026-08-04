@@ -27,6 +27,11 @@ test("adds an installed Agent only after a successful ACP handshake", async ({
     settings.getByRole("button", { name: "Remove Local Fake Agent" }),
   ).toBeVisible();
 
+  await settings.getByRole("button", { name: "Test Local Fake Agent" }).click();
+  await expect(settings.getByRole("status")).toContainText(
+    "created a test session successfully",
+  );
+
   await page.reload();
   settings = await openSettings(page);
   await expect(

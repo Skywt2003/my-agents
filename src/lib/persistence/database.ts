@@ -552,6 +552,18 @@ export function updateAgentError(id: AgentId, error?: string) {
   `).run(error ?? null, new Date().toISOString(), id);
 }
 
+export function updateAgentEnvironment(
+  id: AgentId,
+  env: Record<string, string>,
+) {
+  getDatabase().prepare(`
+    UPDATE agents
+    SET env_json = ?, capabilities_json = NULL, last_error = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(JSON.stringify(env), new Date().toISOString(), id);
+  return getAgentInstallation(id);
+}
+
 export function deleteAgentInstallation(id: AgentId) {
   getDatabase().prepare(`
     UPDATE agents

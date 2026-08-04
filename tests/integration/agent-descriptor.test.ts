@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listInstalledAgents } from "@/lib/acp/agents";
+import {
+  configureCodexCommand,
+  listInstalledAgents,
+} from "@/lib/acp/agents";
 import {
   closeDatabase,
   upsertAgentInstallation,
@@ -63,5 +66,48 @@ describe("installed Agent descriptors", () => {
         adapter: undefined,
       }),
     ]);
+  });
+
+  it("persists a user-selected Codex executable", () => {
+    upsertAgentInstallation({
+      id: "codex",
+      registryId: "codex-acp",
+      name: "Codex",
+      command: process.execPath,
+      args: ["/opt/myagents/codex-acp/dist/index.js"],
+      env: { CODEX_PATH: "codex" },
+      source: "system",
+    });
+
+    const agents = configureCodexCommand(process.execPath);
+
+    expect(agents).toEqual([
+      expect.objectContaining({
+        id: "codex",
+        displayCommand: process.execPath,
+        available: true,
+      }),
+    ]);
+  });
+
+  it("keeps a configured Codex executable while refreshing default metadata", () => {
+    delete process.env.MYAGENTS_DISABLE_DEFAULT_AGENTS;
+    upsertAgentInstallation({
+      id: "codex",
+      registryId: "codex-acp",
+      name: "Codex",
+      command: process.execPath,
+      args: ["/opt/myagents/codex-acp/dist/index.js"],
+      env: { CODEX_PATH: process.execPath },
+      source: "system",
+    });
+
+    const codex = listInstalledAgents().find(({ id }) => id === "codex");
+
+    expect(codex).toMatchObject({
+      displayCommand: process.execPath,
+      available: true,
+      iconUrl: expect.stringContaining("codex-acp.svg"),
+    });
   });
 });

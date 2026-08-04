@@ -52,6 +52,9 @@ const api: DesktopApi = {
     registry: () => ipcRenderer.invoke("agents:registry"),
     install: (registryId) => ipcRenderer.invoke("agents:install", registryId),
     remove: (id) => ipcRenderer.invoke("agents:remove", id),
+    configureCodex: (command) =>
+      ipcRenderer.invoke("agents:configure-codex", command),
+    test: (id) => ipcRenderer.invoke("agents:test", id),
   },
   terminals: {
     create: (cwd, cols, rows) =>

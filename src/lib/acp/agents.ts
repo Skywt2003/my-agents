@@ -20,6 +20,7 @@ import {
   getAgentInstallation,
   listAgentInstallations,
   updateAgentHandshake,
+  updateAgentEnvironment,
   upsertAgentInstallation,
   type InstalledAgent,
 } from "@/lib/persistence/database";
@@ -98,20 +99,32 @@ function shouldRefreshSystemCodex(agent: InstalledAgent | null) {
   if (!agent || agent.id !== "codex" || agent.registryId !== "codex-acp") {
     return false;
   }
-  const configuredCodex = process.env.MYAGENTS_CODEX_PATH ?? "codex";
-  return agent.source === "system" && agent.env.CODEX_PATH !== configuredCodex;
+  const configuredCodex = process.env.MYAGENTS_CODEX_PATH?.trim();
+  return agent.source === "system" && (
+    configuredCodex
+      ? agent.env.CODEX_PATH !== configuredCodex
+      : !agent.env.CODEX_PATH
+  );
 }
 
 function seedAgent(input: AgentInput & { id: string }) {
   const existing = getAgentInstallation(input.id);
   if (existing && !existing.enabled) return;
-  if (
+  const replaceLaunch =
     !existing ||
     shouldReplaceLegacyPlaceholder(existing) ||
-    shouldRefreshSystemCodex(existing) ||
-    (!existing.iconUrl && Boolean(input.iconUrl))
-  ) {
+    shouldRefreshSystemCodex(existing);
+  if (replaceLaunch) {
     upsertAgentInstallation(input);
+  } else if (!existing.iconUrl && input.iconUrl) {
+    upsertAgentInstallation({
+      ...input,
+      command: existing.command,
+      args: existing.args,
+      env: existing.env,
+      source: existing.source,
+      enabled: existing.enabled,
+    });
   }
 }
 
@@ -188,11 +201,34 @@ export function listInstalledAgents(): AgentDescriptor[] {
       adapter: usesCodexAdapter ? "codex-acp" : undefined,
       source: agent.source,
       enabled: agent.enabled,
-      available: Boolean(findCommand(agent.command)),
+      available: Boolean(
+        findCommand(agent.command) &&
+        (!usesCodexAdapter || findCommand(agent.env.CODEX_PATH ?? "codex")),
+      ),
       capabilities: agent.capabilities,
       error: agent.error,
     };
   });
+}
+
+export function configureCodexCommand(commandInput: string) {
+  const command = commandInput.trim();
+  if (!command) throw new Error("Codex command is required.");
+  const executable = findCommand(command);
+  if (!executable) {
+    throw new Error(`Codex executable was not found: ${command}`);
+  }
+
+  ensureDefaultAgentInstallations();
+  const agent = getAgentInstallation("codex");
+  if (!agent || agent.registryId !== "codex-acp") {
+    throw new Error("The Codex ACP adapter is not installed.");
+  }
+  updateAgentEnvironment(agent.id, {
+    ...agent.env,
+    CODEX_PATH: executable,
+  });
+  return listInstalledAgents();
 }
 
 export function requireInstalledAgent(id: string) {

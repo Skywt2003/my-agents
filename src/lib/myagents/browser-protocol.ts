@@ -21,6 +21,8 @@ export type BrowserRpcMethod =
   | "agents.registry"
   | "agents.install"
   | "agents.remove"
+  | "agents.configureCodex"
+  | "agents.test"
   | "terminals.create"
   | "terminals.close"
   | "terminals.write"
