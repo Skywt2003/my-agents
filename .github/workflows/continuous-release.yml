@@ -25,27 +25,30 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Use HTTPS for public GitHub dependencies
         shell: bash
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Type-check
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Lint
-        run: npm run lint
+        run: pnpm lint
 
       - name: Run tests
-        run: npm test
+        run: pnpm test
 
   package:
     name: Package ${{ matrix.artifact }}
@@ -72,24 +75,27 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
 
       - name: Use HTTPS for public GitHub dependencies
         shell: bash
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build application
-        run: npm run build
+        run: pnpm build
 
       - name: Package application
-        run: npx electron-builder ${{ matrix.builder_args }} --publish never
+        run: pnpm exec electron-builder ${{ matrix.builder_args }} --publish never
 
       - name: Upload package
         uses: actions/upload-artifact@v7

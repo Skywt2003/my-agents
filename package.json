@@ -2,21 +2,22 @@
   "name": "my-agents",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.34.4",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "dev:web": "tsx src/web/server.ts",
-    "dev:remote": "npm run dev:web",
+    "dev:remote": "pnpm dev:web",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "dist": "npm run build && electron-builder",
+    "dist": "pnpm build && electron-builder",
     "postinstall": "install-electron && electron-builder install-app-deps",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "npm run build && node tests/e2e/run.mjs",
+    "test:e2e": "pnpm build && node tests/e2e/run.mjs",
     "test:e2e:web": "node tests/e2e/run-web.mjs"
   },
   "dependencies": {
@@ -64,14 +65,5 @@
     "vite": "^7.3.6",
     "vitest": "^4.1.10",
     "ws": "^8.21.1"
-  },
-  "allowScripts": {
-    "github:Skywt2003/codex-acp#4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc": true,
-    "better-sqlite3@13.0.1": true,
-    "electron@43.2.0": true,
-    "electron-winstaller@5.4.0": true,
-    "esbuild@0.25.12": true,
-    "esbuild@0.28.1": true,
-    "node-pty@1.1.0": true
   }
 }

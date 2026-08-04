@@ -66,7 +66,7 @@ function connect() {
   if (!token) {
     return Promise.reject(
       new Error(
-        "Browser debug token is missing. Open the token URL printed by npm run dev:web.",
+        "Browser debug token is missing. Open the token URL printed by pnpm dev:web.",
       ),
     );
   }

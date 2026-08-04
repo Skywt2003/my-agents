@@ -23,17 +23,18 @@ for remote debugging.
 
 ## Run locally
 
-Requirements: Node.js 20.9 or newer and at least one local ACP agent.
+Requirements: Node.js 20.9 or newer, pnpm 10.34.4, and at least one local ACP
+agent.
 
 Install dependencies and launch the Electron application:
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
-For remote browser debugging, run `npm run dev:web` (the legacy
-`npm run dev:remote` alias is also supported). The server listens only on
+For remote browser debugging, run `pnpm dev:web` (the legacy
+`pnpm dev:remote` alias is also supported). The server listens only on
 `127.0.0.1:3200` by default. Its startup output contains the complete URL with
 a `#token=...` fragment. The fragment is removed from the address bar as soon
 as the browser stores it for the current tab.
@@ -56,7 +57,7 @@ the same ACP client path. The Codex adapter always delegates to the system
 `codex` command. To select a different local Codex installation:
 
 ```bash
-MYAGENTS_CODEX_PATH=/absolute/path/to/codex npm run dev
+MYAGENTS_CODEX_PATH=/absolute/path/to/codex pnpm dev
 ```
 
 OpenCode and Grok Build are resolved from `PATH`. Override them with
@@ -102,12 +103,12 @@ missing or broken.
 ## Checks
 
 ```bash
-npm run typecheck
-npm run lint
-npm test
-npm run test:e2e
-npm run test:e2e:web
-npm run build
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm test:e2e
+pnpm test:e2e:web
+pnpm build
 ```
 
 ## Continuous desktop builds

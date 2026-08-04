@@ -11,6 +11,6 @@ The Electron main process and preload bridge live under `src/main` and
 Vite browser transport in `src/web/server.ts` should remain thin adapters around
 that service.
 
-Use the scripts in `package.json` for validation. In particular, treat
-`npm run dev` and `npm run build` as electron-vite commands, while
-`npm run dev:web` starts the browser debugging transport.
+Use pnpm and the scripts in `package.json` for validation. In particular, treat
+`pnpm dev` and `pnpm build` as electron-vite commands, while `pnpm dev:web`
+starts the browser debugging transport.

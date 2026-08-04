@@ -1,0 +1,7 @@
+onlyBuiltDependencies:
+  - "@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc"
+  - better-sqlite3
+  - electron
+  - electron-winstaller
+  - esbuild
+  - node-pty
