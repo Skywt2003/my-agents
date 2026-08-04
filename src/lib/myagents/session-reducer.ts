@@ -1,15 +1,21 @@
 import type {
   ChatMessage,
   ConversationItem,
+  MessageContentBlock,
   SessionStreamEvent,
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
+import {
+  appendMessageContent,
+  messageText,
+  textContentBlock,
+} from "@/lib/myagents/message-content";
 
 function appendAssistant(
   messages: ChatMessage[],
   id: string,
-  text: string,
+  blocks: MessageContentBlock[],
 ): ChatMessage[] {
   const next = [...messages];
   const index = next.findIndex((message) => message.id === id);
@@ -17,11 +23,12 @@ function appendAssistant(
     next.push({
       id,
       role: "assistant",
-      content: text,
+      content: messageText(blocks),
+      contentBlocks: blocks,
       createdAt: new Date().toISOString(),
     });
   } else {
-    next[index] = { ...next[index], content: next[index].content + text };
+    next[index] = appendMessageContent(next[index], blocks);
   }
   return next;
 }
@@ -29,7 +36,7 @@ function appendAssistant(
 function appendAssistantToConversation(
   conversation: ConversationItem[],
   id: string,
-  text: string,
+  blocks: MessageContentBlock[],
 ): ConversationItem[] {
   const next = [...conversation];
   const index = next.findIndex(
@@ -41,7 +48,8 @@ function appendAssistantToConversation(
       message: {
         id,
         role: "assistant",
-        content: text,
+        content: messageText(blocks),
+        contentBlocks: blocks,
         createdAt: new Date().toISOString(),
       },
     });
@@ -50,7 +58,7 @@ function appendAssistantToConversation(
     if (item.type === "message") {
       next[index] = {
         type: "message",
-        message: { ...item.message, content: item.message.content + text },
+        message: appendMessageContent(item.message, blocks),
       };
     }
   }
@@ -86,13 +94,26 @@ export function applySessionEvent(
   event: SessionStreamEvent,
 ): SessionSummary {
   if (event.type === "assistant_delta") {
+    const blocks = [textContentBlock(event.text)];
     return {
       ...session,
-      messages: appendAssistant(session.messages, event.messageId, event.text),
+      messages: appendAssistant(session.messages, event.messageId, blocks),
       conversation: appendAssistantToConversation(
         session.conversation,
         event.messageId,
-        event.text,
+        blocks,
+      ),
+    };
+  }
+  if (event.type === "assistant_content") {
+    const blocks = [event.block];
+    return {
+      ...session,
+      messages: appendAssistant(session.messages, event.messageId, blocks),
+      conversation: appendAssistantToConversation(
+        session.conversation,
+        event.messageId,
+        blocks,
       ),
     };
   }

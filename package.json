@@ -22,7 +22,7 @@
     "test:e2e:web": "node tests/e2e/run-web.mjs"
   },
   "dependencies": {
-    "@agentclientprotocol/codex-acp": "github:Skywt2003/codex-acp#4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc",
+    "@agentclientprotocol/codex-acp": "github:Skywt2003/codex-acp#22aa7d168fece7d629b982a8795ea68b56d69a5f",
     "@agentclientprotocol/sdk": "^1.3.0",
     "@sentry/electron": "7.16.0",
     "@sentry/react": "10.67.0",

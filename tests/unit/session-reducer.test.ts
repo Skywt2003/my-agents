@@ -27,6 +27,25 @@ describe("applySessionEvent", () => {
     ]);
   });
 
+  it("appends structured assistant image content", () => {
+    const updated = applySessionEvent(sessionFixture(), {
+      type: "assistant_content",
+      messageId: "assistant-image",
+      block: { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+    });
+
+    expect(updated.messages).toMatchObject([
+      {
+        id: "assistant-image",
+        role: "assistant",
+        content: "",
+        contentBlocks: [
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+        ],
+      },
+    ]);
+  });
+
   it("updates an existing tool activity without changing its position", () => {
     const session = sessionFixture({
       activities: [

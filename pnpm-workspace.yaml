@@ -1,5 +1,5 @@
 onlyBuiltDependencies:
-  - "@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc"
+  - "@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/22aa7d168fece7d629b982a8795ea68b56d69a5f"
   - better-sqlite3
   - electron
   - electron-winstaller

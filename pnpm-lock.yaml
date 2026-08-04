@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@agentclientprotocol/codex-acp':
-        specifier: github:Skywt2003/codex-acp#4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc
-        version: https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc
+        specifier: github:Skywt2003/codex-acp#22aa7d168fece7d629b982a8795ea68b56d69a5f
+        version: https://codeload.github.com/Skywt2003/codex-acp/tar.gz/22aa7d168fece7d629b982a8795ea68b56d69a5f
       '@agentclientprotocol/sdk':
         specifier: ^1.3.0
         version: 1.3.0(zod@4.4.3)
@@ -150,8 +150,8 @@ importers:
 
 packages:
 
-  '@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc':
-    resolution: {gitHosted: true, integrity: sha512-/gx1sDoLiWekx+6o4GOQqbaRid7xz5WNkGH0bkkXpYL2ZzEZJG3yNXQcDocyn96SSxhXs3OAsSQvxXTv8VTYkg==, tarball: https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc}
+  '@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/22aa7d168fece7d629b982a8795ea68b56d69a5f':
+    resolution: {gitHosted: true, integrity: sha512-KjcZ/BZQg56rkucHZe5i0pwYgnlhhn9g76vuO/3S/SbTPJ+dRdvKyYEJQujNclvu7XYEjOyhOJcpEfrMp0UaIw==, tarball: https://codeload.github.com/Skywt2003/codex-acp/tar.gz/22aa7d168fece7d629b982a8795ea68b56d69a5f}
     version: 1.1.9
     hasBin: true
 
@@ -4737,7 +4737,7 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/4d5d3ccbc0cb8de4fc4e6a7aee672740b75b49dc':
+  '@agentclientprotocol/codex-acp@https://codeload.github.com/Skywt2003/codex-acp/tar.gz/22aa7d168fece7d629b982a8795ea68b56d69a5f':
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.4.3)
       '@openai/codex': 0.145.0

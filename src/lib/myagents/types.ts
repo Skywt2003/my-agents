@@ -93,8 +93,13 @@ export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  contentBlocks?: MessageContentBlock[];
   createdAt: string;
 };
+
+export type MessageContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string; uri?: string };
 
 export type ToolActivity = {
   id: string;
@@ -150,6 +155,7 @@ export type SessionSummary = {
 
 export type SessionStreamEvent =
   | { type: "assistant_delta"; messageId: string; text: string }
+  | { type: "assistant_content"; messageId: string; block: MessageContentBlock }
   | { type: "thought_delta"; text: string }
   | { type: "tool"; activity: ToolActivity }
   | { type: "plan"; entries: Array<{ content: string; status: string }> }

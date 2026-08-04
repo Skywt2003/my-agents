@@ -65,7 +65,59 @@ describe("SQLite persistence", () => {
       "activities",
       "conversation_items",
     ]));
+    expect(
+      (db.pragma("table_info(messages)") as Array<{ name: string }>).map(
+        ({ name }) => name,
+      ),
+    ).toContain("content_blocks_json");
     db.close();
+  });
+
+  it("migrates legacy codex-acp data image links into structured image blocks", () => {
+    const session = sessionFixture();
+    persistSession(session);
+    closeDatabase();
+
+    const legacy = [
+      "Before image\n",
+      "[@image](data:image/png;base64,aGVsbG8=)",
+      "\nAfter image",
+    ].join("");
+    const db = new Database(databasePath());
+    db.prepare(`
+      INSERT INTO messages (
+        id, session_id, role, content, content_blocks_json, created_at, sequence
+      ) VALUES (?, ?, ?, ?, NULL, ?, ?)
+    `).run("legacy-user", session.id, "user", legacy, "2026-01-01T00:00:01.000Z", 0);
+    db.prepare(`
+      INSERT INTO conversation_items (session_id, item_type, item_id, sequence)
+      VALUES (?, 'message', ?, 0)
+    `).run(session.id, "legacy-user");
+    db.close();
+
+    const restored = getPersistedSession(session.id)?.messages[0];
+    expect(restored?.content).toBe("Before image\n\nAfter image");
+    expect(restored?.content).not.toContain("base64");
+    expect(restored?.contentBlocks).toEqual([
+      { type: "text", text: "Before image\n" },
+      { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+      { type: "text", text: "\nAfter image" },
+    ]);
+
+    closeDatabase();
+    const migratedDb = new Database(databasePath(), { readonly: true });
+    const migrated = migratedDb.prepare(`
+        SELECT content, content_blocks_json
+        FROM messages
+        WHERE session_id = ? AND id = ?
+      `)
+      .get(session.id, "legacy-user") as {
+        content: string;
+        content_blocks_json: string;
+      };
+    expect(migrated.content).not.toContain("data:image");
+    expect(migrated.content_blocks_json).toContain('"type":"image"');
+    migratedDb.close();
   });
 
   it("keeps session history while disabling a removed Agent", () => {

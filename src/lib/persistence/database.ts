@@ -15,6 +15,12 @@ import type {
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
+import {
+  isMessageContentBlock,
+  messageText,
+  normalizeMessageContentBlocks,
+  parseLegacyMessageContent,
+} from "@/lib/myagents/message-content";
 import { projectFromWorkingDirectory } from "@/lib/myagents/project";
 
 export type InstalledAgent = {
@@ -82,6 +88,7 @@ type MessageRow = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  content_blocks_json: string | null;
   created_at: string;
 };
 
@@ -122,6 +129,37 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function addMessageContentBlocksColumn(db: Database.Database) {
+  const columns = db.pragma("table_info(messages)") as Array<{ name: string }>;
+  if (!columns.some(({ name }) => name === "content_blocks_json")) {
+    db.exec("ALTER TABLE messages ADD COLUMN content_blocks_json TEXT");
+  }
+}
+
+function migrateLegacyMessageImages(db: Database.Database) {
+  const rows = db.prepare(`
+    SELECT session_id, id, content
+    FROM messages
+    WHERE role = 'user'
+      AND content_blocks_json IS NULL
+      AND instr(content, '[@image](data:image/') > 0
+  `).all() as Array<{ session_id: string; id: string; content: string }>;
+  if (rows.length === 0) return;
+
+  const update = db.prepare(`
+    UPDATE messages
+    SET content = ?, content_blocks_json = ?
+    WHERE session_id = ? AND id = ?
+  `);
+  db.transaction(() => {
+    for (const row of rows) {
+      const blocks = parseLegacyMessageContent(row.content);
+      if (!blocks.some(({ type }) => type === "image")) continue;
+      update.run(messageText(blocks), JSON.stringify(blocks), row.session_id, row.id);
+    }
+  })();
 }
 
 function createAgentsTable(db: Database.Database, table = "agents") {
@@ -380,6 +418,7 @@ function getDatabase() {
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
       role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
       content TEXT NOT NULL,
+      content_blocks_json TEXT,
       created_at TEXT NOT NULL,
       sequence INTEGER NOT NULL,
       PRIMARY KEY (session_id, id)
@@ -414,6 +453,8 @@ function getDatabase() {
     CREATE INDEX IF NOT EXISTS agents_registry_id_idx
       ON agents(registry_id);
   `);
+  addMessageContentBlocksColumn(database);
+  migrateLegacyMessageImages(database);
   backfillConversationItems(database);
 
   const foreignKeyErrors = database.pragma("foreign_key_check") as unknown[];
@@ -793,7 +834,7 @@ export function getPersistedSession(id: string) {
 
   const messages = db
     .prepare(`
-      SELECT id, role, content, created_at
+      SELECT id, role, content, content_blocks_json, created_at
       FROM messages
       WHERE session_id = ?
       ORDER BY sequence
@@ -808,12 +849,20 @@ export function getPersistedSession(id: string) {
     `)
     .all(id) as ActivityRow[];
 
-  const messageItems = messages.map((message) => ({
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    createdAt: message.created_at,
-  }));
+  const messageItems = messages.map((message) => {
+    const parsedBlocks = parseJson<unknown>(message.content_blocks_json, null);
+    const contentBlocks = Array.isArray(parsedBlocks) &&
+        parsedBlocks.every(isMessageContentBlock)
+      ? normalizeMessageContentBlocks(message.content, parsedBlocks)
+      : normalizeMessageContentBlocks(message.content, undefined, message.role === "user");
+    return {
+      id: message.id,
+      role: message.role,
+      content: messageText(contentBlocks),
+      contentBlocks,
+      createdAt: message.created_at,
+    };
+  });
   const messageById = new Map(messageItems.map((message) => [message.id, message]));
   const activityById = new Map(activities.map((activity) => [activity.id, activity]));
   const conversationRows = db.prepare(`
@@ -890,14 +939,20 @@ export function persistMessage(
   message: ChatMessage,
   sequence: number,
 ) {
+  const contentBlocks = normalizeMessageContentBlocks(
+    message.content,
+    message.contentBlocks,
+    message.role === "user",
+  );
   getDatabase()
     .prepare(`
       INSERT INTO messages (
-        id, session_id, role, content, created_at, sequence
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        id, session_id, role, content, content_blocks_json, created_at, sequence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, id) DO UPDATE SET
         role = excluded.role,
         content = excluded.content,
+        content_blocks_json = excluded.content_blocks_json,
         created_at = excluded.created_at,
         sequence = excluded.sequence
     `)
@@ -905,7 +960,8 @@ export function persistMessage(
       message.id,
       sessionId,
       message.role,
-      message.content,
+      messageText(contentBlocks),
+      JSON.stringify(contentBlocks),
       message.createdAt,
       sequence,
     );

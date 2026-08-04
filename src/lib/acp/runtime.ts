@@ -22,6 +22,7 @@ import type {
   AgentId,
   ChatMessage,
   ConversationItem,
+  MessageContentBlock,
   PermissionRequest,
   SessionProject,
   SessionSource,
@@ -31,6 +32,12 @@ import type {
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
+import {
+  appendMessageContent,
+  messageContentBlocksFromAcp,
+  messageText,
+  textContentBlock,
+} from "@/lib/myagents/message-content";
 import {
   listInstalledAgents,
   requireInstalledAgent,
@@ -217,16 +224,17 @@ function upsertMessage(
   runtime: SessionRuntime,
   role: ChatMessage["role"],
   messageId: string,
-  text: string,
+  contentBlocks: MessageContentBlock[],
 ) {
   const existing = runtime.messages.find((message) => message.id === messageId);
   if (existing) {
-    existing.content += text;
+    Object.assign(existing, appendMessageContent(existing, contentBlocks));
   } else {
     const message: ChatMessage = {
       id: messageId,
       role,
-      content: text,
+      content: messageText(contentBlocks),
+      contentBlocks,
       createdAt: new Date().toISOString(),
     };
     runtime.messages.push(message);
@@ -314,28 +322,31 @@ function messageIdForChunk(
 function handleSessionUpdate(runtime: SessionRuntime, update: SessionUpdate) {
   switch (update.sessionUpdate) {
     case "user_message_chunk": {
-      if (!runtime.hydrating || update.content.type !== "text") return;
+      if (!runtime.hydrating) return;
+      const contentBlocks = messageContentBlocksFromAcp(update.content, true);
+      if (contentBlocks.length === 0) return;
       const messageId = messageIdForChunk(
         runtime,
         "user",
         update.messageId,
       );
-      upsertMessage(runtime, "user", messageId, update.content.text);
+      upsertMessage(runtime, "user", messageId, contentBlocks);
       return;
     }
     case "agent_message_chunk": {
-      if (update.content.type !== "text") return;
+      const contentBlocks = messageContentBlocksFromAcp(update.content);
+      if (contentBlocks.length === 0) return;
       const messageId = messageIdForChunk(
         runtime,
         "assistant",
         update.messageId,
       );
-      upsertMessage(runtime, "assistant", messageId, update.content.text);
-      publish(runtime, {
-        type: "assistant_delta",
-        messageId,
-        text: update.content.text,
-      });
+      upsertMessage(runtime, "assistant", messageId, contentBlocks);
+      for (const block of contentBlocks) {
+        publish(runtime, block.type === "text"
+          ? { type: "assistant_delta", messageId, text: block.text }
+          : { type: "assistant_content", messageId, block });
+      }
       return;
     }
     case "agent_thought_chunk":
@@ -982,6 +993,7 @@ export async function promptSession(id: string, text: string, listener?: Listene
       id: randomUUID(),
       role: "user",
       content: text,
+      contentBlocks: [textContentBlock(text)],
       createdAt: new Date().toISOString(),
     };
     if (!runtime.persisted) persistRuntime(runtime);

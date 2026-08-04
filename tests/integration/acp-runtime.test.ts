@@ -334,6 +334,52 @@ describe("ACP runtime with a deterministic stdio agent", () => {
     expect((await readLog()).map(({ method }) => method)).toContain("session/load");
   });
 
+  it("loads structured and legacy history images without exposing base64 as text", async () => {
+    upsertAgentInstallation({
+      id: "fake-agent",
+      name: "Fake Agent",
+      command: process.execPath,
+      args: [fixturePath],
+      env: { FAKE_ACP_LOG: logPath, FAKE_ACP_SCENARIO: "load-history-images" },
+      source: "system",
+    });
+    const session = await createSession(
+      { id: "project-1", name: "Workspace", path: workspace },
+      "fake-agent",
+    );
+    shutdownRuntime();
+
+    const reloaded = await reloadSession(session.id);
+    const loaded = reloaded.messages.find(({ id }) => id === "loaded-user");
+    const legacy = reloaded.messages.find(({ id }) => id === "legacy-image-user");
+
+    expect(loaded).toMatchObject({
+      content: "Loaded question",
+      contentBlocks: [
+        { type: "text", text: "Loaded question" },
+        { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+    expect(legacy).toMatchObject({
+      content: "Legacy ",
+      contentBlocks: [
+        { type: "text", text: "Legacy " },
+        { type: "image", mimeType: "image/jpeg", data: "d29ybGQ=" },
+      ],
+    });
+    expect(reloaded.messages.some(({ content }) => content.includes("base64"))).toBe(false);
+    expect(getPersistedSession(session.id)?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "loaded-user",
+          contentBlocks: expect.arrayContaining([
+            expect.objectContaining({ type: "image", mimeType: "image/png" }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
   it("keeps persisted conversation content visible while session history reloads", async () => {
     upsertAgentInstallation({
       id: "fake-agent",

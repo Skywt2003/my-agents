@@ -152,7 +152,7 @@ const app = acp
     }
     if (historyPath) {
       await replayHistory(context);
-    } else if (scenario === "load-history") {
+    } else if (scenario === "load-history" || scenario === "load-history-images") {
       await context.client.notify(acp.methods.client.session.update, {
         sessionId: context.params.sessionId,
         update: {
@@ -161,6 +161,31 @@ const app = acp
           content: { type: "text", text: "Loaded question" },
         },
       });
+      if (scenario === "load-history-images") {
+        await context.client.notify(acp.methods.client.session.update, {
+          sessionId: context.params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            messageId: "loaded-user",
+            content: {
+              type: "image",
+              mimeType: "image/png",
+              data: "aGVsbG8=",
+            },
+          },
+        });
+        await context.client.notify(acp.methods.client.session.update, {
+          sessionId: context.params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            messageId: "legacy-image-user",
+            content: {
+              type: "text",
+              text: "Legacy [@image](data:image/jpeg;base64,d29ybGQ=)",
+            },
+          },
+        });
+      }
       await context.client.notify(acp.methods.client.session.update, {
         sessionId: context.params.sessionId,
         update: {

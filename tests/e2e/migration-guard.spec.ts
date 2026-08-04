@@ -1,12 +1,24 @@
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import Database from "better-sqlite3";
 import { expect, test, _electron as electron } from "@playwright/test";
 
+import {
+  closeDatabase,
+  databasePath,
+  persistConversationItem,
+  persistMessage,
+  persistSession,
+  upsertAgentInstallation,
+} from "@/lib/persistence/database";
 import { exerciseCoreWorkflow } from "./core-workflow";
+import { sessionFixture } from "../helpers/session";
 
 const testDataDirectory = "/tmp/myagents-playwright-data";
 const testWorkspace = "/tmp/myagents-playwright-workspace";
 const telemetryDataDirectory = "/tmp/myagents-playwright-telemetry-data";
+const imageDataDirectory = "/tmp/myagents-playwright-image-data";
+const onePixelPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlKf8cAAAAASUVORK5CYII=";
 
 test("excludes browser debug code from the Electron renderer bundle", async () => {
   const assetsDirectory = resolve("out/renderer/assets");
@@ -75,6 +87,76 @@ test("preserves the core Electron workflow", async () => {
     await expect(page.getByRole("radio", { name: "Anonymous" })).toBeChecked();
     await page.getByRole("button", { name: "Close" }).click();
     await exerciseCoreWorkflow(page);
+  } finally {
+    await electronApp.close();
+  }
+});
+
+test("migrates and renders legacy image history without base64 text", async () => {
+  await rm(imageDataDirectory, { recursive: true, force: true });
+  process.env.MYAGENTS_DATA_DIR = imageDataDirectory;
+  upsertAgentInstallation({
+    id: "fake-agent",
+    name: "Fake Agent",
+    command: process.execPath,
+    source: "system",
+  });
+  const session = sessionFixture({
+    id: "image-session",
+    acpSessionId: "image-acp-session",
+    title: "Image history",
+    agentTitle: "Image history",
+  });
+  persistSession(session);
+  persistMessage(session.id, {
+    id: "legacy-image",
+    role: "user",
+    content: "Screenshot attached",
+    createdAt: "2026-01-01T00:00:01.000Z",
+  }, 0);
+  persistConversationItem(session.id, {
+    type: "message",
+    message: {
+      id: "legacy-image",
+      role: "user",
+      content: "Screenshot attached",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    },
+  }, 0);
+  closeDatabase();
+  const legacyDb = new Database(databasePath());
+  legacyDb.prepare(`
+    UPDATE messages
+    SET content = ?, content_blocks_json = NULL
+    WHERE session_id = ? AND id = ?
+  `).run(
+    `Screenshot attached\n[@image](data:image/png;base64,${onePixelPng})`,
+    session.id,
+    "legacy-image",
+  );
+  legacyDb.close();
+  delete process.env.MYAGENTS_DATA_DIR;
+
+  const executablePath = process.env.MYAGENTS_E2E_EXECUTABLE;
+  const electronApp = await electron.launch({
+    ...(executablePath ? { executablePath } : {}),
+    args: executablePath ? ["--no-sandbox"] : ["--no-sandbox", "."],
+    env: {
+      ...process.env,
+      MYAGENTS_DATA_DIR: imageDataDirectory,
+      MYAGENTS_DISABLE_DEFAULT_AGENTS: "1",
+      MYAGENTS_TEST_AGENT_PATH: resolve("tests/fixtures/fake-acp-agent.mjs"),
+      FAKE_ACP_SESSION_LOAD_DELAY_MS: "20000",
+    },
+  });
+  const page = await electronApp.firstWindow();
+
+  try {
+    await expect(page.getByRole("heading", { name: "Image history" })).toBeVisible();
+    const image = page.getByRole("img", { name: "Message attachment" });
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect(page.locator("body")).not.toContainText("data:image/png;base64");
   } finally {
     await electronApp.close();
   }

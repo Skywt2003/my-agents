@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Tabs } from "@base-ui/react/tabs";
 import { cjk } from "@streamdown/cjk";
 import {
@@ -79,6 +79,11 @@ import type {
   SessionSummary,
   ToolActivity,
 } from "@/lib/myagents/types";
+import {
+  imageDataUrl,
+  normalizeMessageContentBlocks,
+  textContentBlock,
+} from "@/lib/myagents/message-content";
 import { applySessionEvent } from "@/lib/myagents/session-reducer";
 import { cn } from "@/lib/utils";
 
@@ -724,6 +729,7 @@ export function MyAgentsApp() {
     const id = target.id;
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(), role: "user", content: message, createdAt: new Date().toISOString(),
+      contentBlocks: [textContentBlock(message)],
     };
     setDraft("");
     patchSession(id, (session) => ({
@@ -1535,26 +1541,58 @@ function NoSession({ loading, error, onCreate }: { loading: boolean; error: stri
   return <div className="flex h-full flex-col items-center justify-center px-6 text-center"><div className="mb-5 flex size-12 items-center justify-center rounded-xl border bg-card">{loading ? <LoaderCircle className="animate-spin text-muted-foreground" /> : <Bot className="text-muted-foreground" />}</div><h1 className="text-lg font-semibold">{loading ? "Loading MyAgents" : "Start with a fresh session"}</h1><p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{error ?? "Connect to a local ACP agent and work inside any folder on this machine."}</p>{!loading && <Button className="mt-5" size="sm" onClick={onCreate}><Plus />New session</Button>}</div>;
 }
 
-function Message({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
+const Message = memo(function Message({
+  message,
+  isStreaming,
+}: {
+  message: ChatMessage;
+  isStreaming: boolean;
+}) {
   const user = message.role === "user";
-  if (user) {
-    return <article className="ml-auto max-w-[85%] rounded-lg bg-muted px-2 py-2"><p className="select-text whitespace-pre-wrap break-words text-[12px] leading-[17px] text-foreground/90">{message.content}</p></article>;
-  }
+  const blocks = normalizeMessageContentBlocks(
+    message.content,
+    message.contentBlocks,
+    user,
+  );
 
   return (
-    <article>
-      <Streamdown
-        className="select-text break-words text-[12px] leading-[17px] text-foreground/90"
-        components={streamdownComponents}
-        isAnimating={isStreaming}
-        linkSafety={streamdownLinkSafety}
-        mode={isStreaming ? "streaming" : "static"}
-        plugins={streamdownPlugins}
-      >
-        {message.content}
-      </Streamdown>
+    <article className={user
+      ? "ml-auto max-w-[85%] rounded-lg bg-muted px-2 py-2"
+      : undefined}
+    >
+      <div className="space-y-2">
+        {blocks.map((block, index) => block.type === "image"
+          ? <MessageImage key={`${message.id}-image-${index}`} block={block} />
+          : user
+            ? block.text
+              ? <p key={`${message.id}-text-${index}`} className="select-text whitespace-pre-wrap break-words text-[12px] leading-[17px] text-foreground/90">{block.text}</p>
+              : null
+            : <Streamdown
+                key={`${message.id}-text-${index}`}
+                className="select-text break-words text-[12px] leading-[17px] text-foreground/90"
+                components={streamdownComponents}
+                isAnimating={isStreaming}
+                linkSafety={streamdownLinkSafety}
+                mode={isStreaming ? "streaming" : "static"}
+                plugins={streamdownPlugins}
+              >
+                {block.text}
+              </Streamdown>)}
+      </div>
     </article>
   );
+});
+
+function MessageImage({
+  block,
+}: {
+  block: Extract<NonNullable<ChatMessage["contentBlocks"]>[number], { type: "image" }>;
+}) {
+  const src = imageDataUrl(block);
+  if (!src) {
+    return <p className="text-xs text-muted-foreground">Unsupported image format: {block.mimeType}</p>;
+  }
+  return <img src={src} alt="Message attachment" loading="lazy" decoding="async" className="max-h-[420px] max-w-full rounded-md border object-contain" />;
 }
 
 function ExternalLinkSafetyModal({
