@@ -289,7 +289,7 @@ function ModelSelect({
       <SelectTrigger
         id={id}
         size="sm"
-        className="max-w-56 text-xs"
+        className="max-w-56 text-[10px]"
         aria-label="Model"
         title={unavailable ? "This agent does not expose model selection through ACP." : undefined}
       >
@@ -823,13 +823,13 @@ export function MyAgentsApp() {
         className="macos-sidebar-surface relative flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-sidebar"
       >
         <div className={cn(
-          "macos-titlebar-drag-region macos-window-drag-region flex h-12 shrink-0 items-center gap-2",
+          "macos-titlebar-drag-region macos-window-drag-region flex h-10 shrink-0 items-center gap-2",
           sidebarCollapsed && "macos-titlebar-drag-region-collapsed",
-          sidebarCollapsed ? "justify-center px-2" : "px-5",
+          sidebarCollapsed ? "justify-center px-2" : "px-3",
         )}>
           {!sidebarCollapsed ? (
             <>
-              <p className="min-w-0 flex-1 truncate text-sm font-semibold">MyAgents</p>
+              <p className="min-w-0 flex-1 truncate text-xs font-semibold">MyAgents</p>
               {__MYAGENTS_BROWSER_DEBUG__ ? (
                 <Badge variant="outline" className="shrink-0 text-[9px] uppercase tracking-wide">
                   Browser debug
@@ -868,12 +868,12 @@ export function MyAgentsApp() {
             <Separator />
             <ScrollArea className="min-h-0 flex-1">
           <div className="overflow-x-hidden px-3 py-3">
-            <div className="mb-2 flex h-6 items-center justify-between pl-2 pr-1"><p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Projects</p><div className="flex items-center gap-0.5"><Button type="button" variant="ghost" size="icon-xs" onClick={() => setProjectDialogOpen(true)} aria-label="Add project"><Plus /></Button><Button type="button" variant="ghost" size="icon-xs" disabled={loading || syncing} onClick={() => void syncSessions()} aria-label={syncing ? "Syncing agent sessions" : "Sync agent sessions"}><RefreshCw className={cn(syncing && "animate-spin")} /></Button></div></div>
+            <div className="mb-1 flex h-6 items-center justify-between pl-1 pr-0.5"><p className="text-[10px] font-semibold uppercase tracking-[0.035em] text-muted-foreground">Projects</p><div className="flex items-center gap-0.5"><Button type="button" variant="ghost" size="icon-xs" onClick={() => setProjectDialogOpen(true)} aria-label="Add project"><Plus /></Button><Button type="button" variant="ghost" size="icon-xs" disabled={loading || syncing} onClick={() => void syncSessions()} aria-label={syncing ? "Syncing agent sessions" : "Sync agent sessions"}><RefreshCw className={cn(syncing && "animate-spin")} /></Button></div></div>
             {loading ? <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading" /> : projects.length === 0 ? (
-              <button type="button" onClick={() => setProjectDialogOpen(true)} className="w-full rounded-lg px-2 py-3 text-left text-xs leading-5 text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground">No projects yet. Add one to start a session.</button>
-            ) : <div data-slot="session-directory" className="max-w-full space-y-1" style={{ width: sidebarWidth - SIDEBAR_HORIZONTAL_PADDING }}>{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center gap-1" onMouseEnter={() => setHoveredProjectId(project.id)} onMouseLeave={() => setHoveredProjectId((current) => current === project.id ? null : current)}><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span></button><Button type="button" variant="ghost" size="icon-xs" className={cn("mr-1 opacity-0 transition-opacity focus-visible:opacity-100", hoveredProjectId === project.id && "opacity-100")} aria-label={`New session in ${project.name}`} onClick={() => openNewSession(project.id)}><Plus /></Button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
-              <button key={session.id} onClick={() => { discardDraftSession(); setSelectedId(session.id); setCreatingSessionView(false); }} className={cn("flex h-8 w-full items-center gap-2 rounded-lg px-2.5 text-left transition-colors", selectedId === session.id && !creatingSessionView ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{session.title}</span>
+              <button type="button" onClick={() => setProjectDialogOpen(true)} className="w-full rounded-lg px-2 py-3 text-left text-[11px] leading-[17px] text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground">No projects yet. Add one to start a session.</button>
+            ) : <div data-slot="session-directory" className="max-w-full space-y-1" style={{ width: sidebarWidth - SIDEBAR_HORIZONTAL_PADDING }}>{projectGroups.map((project) => { const collapsed = collapsedProjectIds.has(project.id); return <section key={project.id}><div className="flex h-8 items-center gap-1" onMouseEnter={() => setHoveredProjectId(project.id)} onMouseLeave={() => setHoveredProjectId((current) => current === project.id ? null : current)}><button type="button" aria-expanded={!collapsed} onClick={() => toggleProject(project.id)} className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-left text-[11px] font-medium text-foreground outline-none hover:bg-sidebar-accent/60 focus-visible:ring-2 focus-visible:ring-ring"><ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} /><FolderGit2 className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 flex-1 truncate">{project.name}</span></button><Button type="button" variant="ghost" size="icon-xs" className={cn("mr-1 opacity-0 transition-opacity focus-visible:opacity-100", hoveredProjectId === project.id && "opacity-100")} aria-label={`New session in ${project.name}`} onClick={() => openNewSession(project.id)}><Plus /></Button></div>{!collapsed && <div className="ml-5 space-y-0.5 border-l pl-1">{project.sessions.map((session) => (
+              <button key={session.id} onClick={() => { discardDraftSession(); setSelectedId(session.id); setCreatingSessionView(false); }} className={cn("flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left transition-colors", selectedId === session.id && !creatingSessionView ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground")}>
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{session.title}</span>
                 <span className="flex shrink-0 items-center gap-1.5">
                   <AgentIcon session={session} />
                   <span className="flex size-3 shrink-0 items-center justify-center">
@@ -895,7 +895,7 @@ export function MyAgentsApp() {
             ))}</div>}</section>; })}</div>}
           </div>
             </ScrollArea>
-            <div className="h-12 border-t px-3"><div className="flex h-full items-center gap-2 rounded-lg px-2"><Avatar size="sm" className="rounded-md"><AvatarFallback className="rounded-md bg-muted"><Bot className="size-3.5" /></AvatarFallback></Avatar><p className="min-w-0 flex-1 truncate text-xs font-medium">{agents.filter(({ enabled }) => enabled).length} Agents</p><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
+            <div className="h-10 border-t px-3"><div className="flex h-full items-center gap-2 rounded-md px-1"><Avatar size="sm" className="rounded-md"><AvatarFallback className="rounded-md bg-muted"><Bot className="size-3.5" /></AvatarFallback></Avatar><p className="min-w-0 flex-1 truncate text-[11px] font-medium">{agents.filter(({ enabled }) => enabled).length} Agents</p><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
             <ResizeHandle
           orientation="vertical"
           value={sidebarWidth}
@@ -918,12 +918,12 @@ export function MyAgentsApp() {
         {loading && !selected ? (
           <NoSession loading error={pageError} onCreate={() => openNewSession()} />
         ) : creatingSessionView || !selected ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-12">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-3 py-8">
             <div className="w-full max-w-2xl -translate-y-[5vh]">
-              <div className="mb-7 text-center"><div className="mx-auto mb-4 flex size-11 items-center justify-center rounded-xl bg-muted"><Sparkles className="size-4 text-muted-foreground" /></div><h1 className="text-lg font-semibold">Start a new session</h1><p className="mt-1.5 text-sm text-muted-foreground">Choose a project and an agent, then describe what you want to do.</p></div>
+              <div className="mb-5 text-center"><div className="mx-auto mb-3 flex size-10 items-center justify-center rounded-lg bg-muted"><Sparkles className="size-4 text-muted-foreground" /></div><h1 className="text-[15px] font-semibold">Start a new session</h1><p className="mt-1 text-xs text-muted-foreground">Choose a project and an agent, then describe what you want to do.</p></div>
               {pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}
-              <div className="rounded-2xl border bg-card p-2 shadow-sm focus-within:ring-1 focus-within:ring-ring">
-                <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void startNewSession(); } }} placeholder="What would you like to work on?" autoFocus className="min-h-28 resize-none border-0 bg-transparent px-3 py-3 text-sm shadow-none focus-visible:ring-0" />
+              <div className="rounded-[9px] border bg-card p-2 shadow-sm focus-within:ring-1 focus-within:ring-ring">
+                <Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void startNewSession(); } }} placeholder="What would you like to work on?" autoFocus className="min-h-16 resize-none border-0 bg-transparent px-2 py-2 text-xs shadow-none focus-visible:ring-0" />
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t px-1 pt-2">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <Select
@@ -1006,11 +1006,11 @@ export function MyAgentsApp() {
             </div>
           </div>
         ) : selected ? <>
-          <header className="macos-window-drag-region flex h-12 shrink-0 items-center justify-between border-b px-6"><div className="flex min-w-0 items-center gap-2"><h1 className="min-w-0 truncate text-sm font-semibold">{selected.title}</h1><SessionDetailsDialog session={selected} onSessionChanged={(session) => patchSession(session.id, () => session)} /><AgentIcon session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></header>
+          <header className="macos-window-drag-region flex h-10 shrink-0 items-center justify-between border-b px-3"><div className="flex min-w-0 items-center gap-2"><h1 className="min-w-0 truncate text-xs font-semibold">{selected.title}</h1><SessionDetailsDialog session={selected} onSessionChanged={(session) => patchSession(session.id, () => session)} /><AgentIcon session={selected} /><Badge variant="outline" className="h-5 gap-1 px-1.5 text-[10px] font-normal"><span className={cn("size-1.5 rounded-full", selected.status === "error" ? "bg-destructive" : "bg-emerald-500")} />{selected.status === "running" ? "Working" : selected.status === "error" ? "Offline" : "Ready"}</Badge></div><Button variant={terminalOpen ? "secondary" : "ghost"} size="icon-sm" aria-label="Toggle terminal panel" aria-pressed={terminalOpen} onClick={() => setTerminalOpen((open) => !open)}><SquareTerminal /></Button></header>
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-0 flex-1 flex-col">
-              <ScrollArea ref={conversationRef} data-slot="conversation-scroll-area" className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-6 py-8"><div className="space-y-7"><ConversationTimeline session={selected} onResolvePermission={resolvePermission} />{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div></div></ScrollArea>
-              <div className="shrink-0 px-6 pb-6 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}{loadingSessionId === selected.id ? <div role="status" aria-live="polite" className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" /><span>Loading conversation</span></div> : null}<div className="rounded-xl border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-20 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0" disabled={selected.status === "error" || loadingSessionId === selected.id} /><div className="flex items-center justify-between gap-2 px-1 pb-1"><ModelSelect id={`session-${selected.id}-model`} session={selected} disabled={selected.status === "running" || selected.status === "error" || loadingSessionId === selected.id || updatingModelSessionId === selected.id} onChange={(session, option, value) => { if (session) void changeModel(session, option, value); }} />{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={() => void sendMessage()} disabled={!draft.trim() || selected.status === "error" || loadingSessionId === selected.id} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
+              <ScrollArea ref={conversationRef} data-slot="conversation-scroll-area" className="min-h-0 flex-1"><div className="mx-auto w-full max-w-3xl px-3 py-4"><div className="space-y-3"><ConversationTimeline session={selected} onResolvePermission={resolvePermission} />{selected.status === "running" && selected.pendingPermissions.length === 0 && <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Agent is working" />}{selected.error && <SessionError message={selected.error} />}</div></div></ScrollArea>
+              <div className="shrink-0 px-3 pb-3 pt-2"><div className="mx-auto max-w-3xl">{pageError && <p className="mb-2 text-xs text-destructive">{pageError}</p>}{syncErrors[selected.agentId] && <p className="mb-2 text-xs text-muted-foreground">History sync: {syncErrors[selected.agentId]}</p>}{loadingSessionId === selected.id ? <div role="status" aria-live="polite" className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-3.5 animate-spin" /><span>Loading conversation</span></div> : null}<div className="rounded-[9px] border bg-card p-2 focus-within:ring-1"><Textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} placeholder={`Message ${selected.agentName}…`} className="min-h-12 resize-none border-0 bg-transparent px-2 py-2 text-xs shadow-none focus-visible:ring-0" disabled={selected.status === "error" || loadingSessionId === selected.id} /><div className="flex items-center justify-between gap-2 px-1 pb-1"><ModelSelect id={`session-${selected.id}-model`} session={selected} disabled={selected.status === "running" || selected.status === "error" || loadingSessionId === selected.id || updatingModelSessionId === selected.id} onChange={(session, option, value) => { if (session) void changeModel(session, option, value); }} />{selected.status === "running" ? <Button size="icon-sm" variant="secondary" onClick={stopSession} aria-label={`Stop ${selected.agentName}`}><CircleStop /></Button> : <Button size="icon-sm" onClick={() => void sendMessage()} disabled={!draft.trim() || selected.status === "error" || loadingSessionId === selected.id} aria-label="Send message"><ArrowUp /></Button>}</div></div></div></div>
             </div>
             <TerminalPanel sessionId={selected.id} cwd={selected.cwd} open={terminalOpen} height={terminalHeight} onHeightChange={setTerminalHeight} onClose={() => setTerminalOpen(false)} />
           </div>
@@ -1388,13 +1388,13 @@ function NoSession({ loading, error, onCreate }: { loading: boolean; error: stri
 function Message({ message, isStreaming }: { message: ChatMessage; isStreaming: boolean }) {
   const user = message.role === "user";
   if (user) {
-    return <article className="ml-auto max-w-[85%] rounded-xl bg-muted px-4 py-2.5"><p className="select-text whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground/90">{message.content}</p></article>;
+    return <article className="ml-auto max-w-[85%] rounded-lg bg-muted px-2 py-2"><p className="select-text whitespace-pre-wrap break-words text-[12px] leading-[17px] text-foreground/90">{message.content}</p></article>;
   }
 
   return (
     <article>
       <Streamdown
-        className="select-text break-words text-[13px] leading-6 text-foreground/90"
+        className="select-text break-words text-[12px] leading-[17px] text-foreground/90"
         components={streamdownComponents}
         isAnimating={isStreaming}
         linkSafety={streamdownLinkSafety}
