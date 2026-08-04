@@ -50,6 +50,7 @@ const api: DesktopApi = {
       ipcRenderer.invoke("sessions:update-title", { id, titleMode, customTitle }),
   },
   projects: {
+    selectDirectory: () => ipcRenderer.invoke("projects:select-directory"),
     create: (name, path) => ipcRenderer.invoke("projects:create", { name, path }),
   },
   agents: {

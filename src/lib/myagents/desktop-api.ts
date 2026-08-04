@@ -59,6 +59,7 @@ export type DesktopApi = {
     ): Promise<SessionSummary>;
   };
   projects: {
+    selectDirectory(): Promise<string | null>;
     create(name: string, path: string): Promise<SessionProject>;
   };
   agents: {

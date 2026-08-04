@@ -170,6 +170,7 @@ const browserApi: DesktopApi = {
       request("sessions.updateTitle", [id, titleMode, customTitle]),
   },
   projects: {
+    selectDirectory: async () => null,
     create: (name, path) => request("projects.create", [name, path]),
   },
   agents: {

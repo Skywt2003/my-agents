@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleStop,
+  FolderOpen,
   FolderGit2,
   Info,
   LoaderCircle,
@@ -329,6 +330,7 @@ export function MyAgentsApp() {
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectPath, setProjectPath] = useState("");
+  const [selectingProjectDirectory, setSelectingProjectDirectory] = useState(false);
   const [addingProject, setAddingProject] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -678,6 +680,19 @@ export function MyAgentsApp() {
     }
   }
 
+  async function selectProjectDirectory() {
+    setSelectingProjectDirectory(true);
+    setProjectError(null);
+    try {
+      const path = await window.myagents.projects.selectDirectory();
+      if (path) setProjectPath(path);
+    } catch (error) {
+      setProjectError(getError(error));
+    } finally {
+      setSelectingProjectDirectory(false);
+    }
+  }
+
   function replaceAgents(nextAgents: AgentDescriptor[]) {
     setAgents(nextAgents);
     if (!nextAgents.some(({ id }) => id === agentId)) {
@@ -858,7 +873,18 @@ export function MyAgentsApp() {
             <DialogHeader><DialogTitle>Add project</DialogTitle><DialogDescription>Give the project a name and bind it to one local directory.</DialogDescription></DialogHeader>
             <div className="grid gap-4 py-2">
               <div className="grid gap-2"><Label htmlFor="project-name">Project name</Label><Input id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="My project" autoFocus /></div>
-              <div className="grid gap-2"><Label htmlFor="project-path">Directory</Label><Input id="project-path" value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="/absolute/path/to/project" className="font-mono text-xs" /></div>
+              <div className="grid gap-2">
+                <Label htmlFor="project-path">Directory</Label>
+                <div className="flex gap-2">
+                  <Input id="project-path" value={projectPath} onChange={(event) => setProjectPath(event.target.value)} placeholder="/absolute/path/to/project" className="min-w-0 font-mono text-xs" />
+                  {window.myagents.transport === "electron" && (
+                    <Button type="button" variant="outline" onClick={() => void selectProjectDirectory()} disabled={selectingProjectDirectory}>
+                      {selectingProjectDirectory ? <LoaderCircle className="animate-spin" /> : <FolderOpen />}
+                      Choose…
+                    </Button>
+                  )}
+                </div>
+              </div>
               {projectError && <p className="text-xs text-destructive">{projectError}</p>}
             </div>
             <DialogFooter><Button variant="ghost" onClick={() => setProjectDialogOpen(false)}>Cancel</Button><Button onClick={() => void addProject()} disabled={addingProject || !projectName.trim() || !projectPath.trim()}>{addingProject && <LoaderCircle className="animate-spin" />}Add project</Button></DialogFooter>

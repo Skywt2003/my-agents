@@ -57,6 +57,17 @@ test("preserves the core Electron workflow", async () => {
       documentPlatform: process.platform,
     });
     await expect(page.getByText("Browser debug", { exact: true })).toHaveCount(0);
+    await electronApp.evaluate(({ dialog }, selectedDirectory) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [selectedDirectory],
+      });
+    }, testWorkspace);
+    await page.getByRole("button", { name: "Add project" }).first().click();
+    const projectDialog = page.getByRole("dialog", { name: "Add project" });
+    await projectDialog.getByRole("button", { name: "Choose…" }).click();
+    await expect(projectDialog.getByLabel("Directory")).toHaveValue(testWorkspace);
+    await projectDialog.getByRole("button", { name: "Cancel" }).click();
     await page.getByRole("button", { name: "Open settings" }).click();
     await page.getByRole("tab", { name: "Privacy" }).click();
     await expect(page.getByRole("radio", { name: "Off" })).toBeChecked();

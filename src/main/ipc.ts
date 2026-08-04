@@ -1,5 +1,5 @@
 import type { BrowserWindow, IpcMainInvokeEvent } from "electron";
-import { ipcMain } from "electron";
+import { dialog, ipcMain } from "electron";
 
 import { createDesktopService } from "@/lib/myagents/desktop-service";
 import type { TelemetryMode } from "@/lib/telemetry/types";
@@ -100,6 +100,16 @@ export function registerIpc(mainWindow: BrowserWindow) {
   );
 
   handle(
+    "projects:select-directory",
+    async () => {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: "Choose project directory",
+        properties: ["openDirectory"],
+      });
+      return result.canceled ? null : result.filePaths[0] ?? null;
+    },
+  );
+  handle(
     "projects:create",
     (_event, input: { name: string; path: string }) =>
       service.projects.create(input.name, input.path),
@@ -170,6 +180,7 @@ export function registerIpc(mainWindow: BrowserWindow) {
     ipcMain.removeHandler("sessions:cancel");
     ipcMain.removeHandler("sessions:resolve-permission");
     ipcMain.removeHandler("sessions:update-title");
+    ipcMain.removeHandler("projects:select-directory");
     ipcMain.removeHandler("projects:create");
     ipcMain.removeHandler("agents:registry");
     ipcMain.removeHandler("agents:install");
