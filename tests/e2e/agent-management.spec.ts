@@ -1,8 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
 async function openSettings(page: Page) {
+  const popup = page.waitForEvent("popup");
   await page.getByRole("button", { name: "Open settings" }).click();
-  return page.getByRole("dialog", { name: "Settings" });
+  const settings = await popup;
+  await expect(settings.getByRole("heading", { name: "Settings" })).toBeVisible();
+  return settings;
 }
 
 test.beforeEach(async ({ page }) => {
@@ -32,6 +35,7 @@ test("adds an installed Agent only after a successful ACP handshake", async ({
     "created a test session successfully",
   );
 
+  await settings.close();
   await page.reload();
   settings = await openSettings(page);
   await expect(

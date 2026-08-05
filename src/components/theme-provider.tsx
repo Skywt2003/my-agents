@@ -15,6 +15,7 @@ type ThemeContextValue = {
 };
 
 const THEME_STORAGE_KEY = "myagents-theme";
+const FONT_STORAGE_KEY = "myagents-font";
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 function storedTheme(defaultTheme: Theme): Theme {
@@ -75,6 +76,25 @@ export function ThemeProvider({
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
   }, [theme]);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === THEME_STORAGE_KEY) {
+        try {
+          setThemeState(storedTheme(defaultTheme));
+        } catch {
+          setThemeState(defaultTheme);
+        }
+      }
+      if (event.key === FONT_STORAGE_KEY) {
+        document.documentElement.dataset.font = event.newValue === "serif"
+          ? "serif"
+          : "sans";
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [defaultTheme]);
 
   const value = useMemo(
     () => ({ theme, setTheme: setThemeState }),

@@ -16,6 +16,18 @@ function nextSubscriptionId(prefix: string) {
 const api: DesktopApi = {
   transport: "electron",
   platform: process.platform,
+  settings: {
+    open: () => ipcRenderer.invoke("settings:open"),
+    onAgentsChanged: (listener) => {
+      const channel = "settings:agents-changed";
+      const ipcListener = (
+        _event: Electron.IpcRendererEvent,
+        agents: Parameters<typeof listener>[0],
+      ) => listener(agents);
+      ipcRenderer.on(channel, ipcListener);
+      return () => ipcRenderer.removeListener(channel, ipcListener);
+    },
+  },
   telemetry: {
     getSettings: () => ipcRenderer.invoke("telemetry:get-settings"),
     setMode: (mode) => ipcRenderer.invoke("telemetry:set-mode", mode),

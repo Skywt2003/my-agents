@@ -80,12 +80,35 @@ test("preserves the core Electron workflow", async () => {
     await projectDialog.getByRole("button", { name: "Choose…" }).click();
     await expect(projectDialog.getByLabel("Directory")).toHaveValue(testWorkspace);
     await projectDialog.getByRole("button", { name: "Cancel" }).click();
+    const settingsWindowPromise = electronApp.waitForEvent("window");
     await page.getByRole("button", { name: "Open settings" }).click();
-    await page.getByRole("tab", { name: "Privacy" }).click();
-    await expect(page.getByRole("radio", { name: "Off" })).toBeChecked();
-    await page.getByRole("radio", { name: "Anonymous" }).click();
-    await expect(page.getByRole("radio", { name: "Anonymous" })).toBeChecked();
-    await page.getByRole("button", { name: "Close" }).click();
+    const settingsWindow = await settingsWindowPromise;
+    await expect(settingsWindow).toHaveURL(/[?&]view=settings/);
+    await expect(
+      settingsWindow.getByRole("heading", { name: "Settings" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("dialog", { name: "Settings" }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Open settings" }).click();
+    await expect.poll(() => electronApp.windows().length).toBe(2);
+    await settingsWindow.getByRole("tab", { name: "Appearance" }).click();
+    await settingsWindow.getByRole("radio", { name: "Dark" }).click();
+    await expect.poll(() => page.locator("html").evaluate((element) =>
+      element.classList.contains("dark")
+    )).toBe(true);
+    await settingsWindow.getByRole("radio", { name: "Serif" }).click();
+    await expect.poll(() => page.locator("html").getAttribute("data-font"))
+      .toBe("serif");
+    await settingsWindow.getByRole("radio", { name: "Light" }).click();
+    await settingsWindow.getByRole("radio", { name: "Sans" }).click();
+    await settingsWindow.getByRole("tab", { name: "Privacy" }).click();
+    await expect(settingsWindow.getByRole("radio", { name: "Off" })).toBeChecked();
+    await settingsWindow.getByRole("radio", { name: "Anonymous" }).click();
+    await expect(
+      settingsWindow.getByRole("radio", { name: "Anonymous" }),
+    ).toBeChecked();
+    await settingsWindow.close();
     await exerciseCoreWorkflow(page);
   } finally {
     await electronApp.close();

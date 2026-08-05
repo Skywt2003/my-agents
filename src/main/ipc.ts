@@ -4,6 +4,7 @@ import { dialog, ipcMain } from "electron";
 import { createDesktopService } from "@/lib/myagents/desktop-service";
 import type { TelemetryMode } from "@/lib/telemetry/types";
 import type {
+  AgentDescriptor,
   SessionStreamEvent,
   TerminalStreamEvent,
 } from "@/lib/myagents/types";
@@ -15,12 +16,21 @@ import {
 
 type Cleanup = () => void;
 
-export function registerIpc(mainWindow: BrowserWindow) {
+type IpcWindowController = {
+  isTrustedSender(event: IpcMainInvokeEvent): boolean;
+  openSettingsWindow(): Promise<void>;
+  broadcastAgentsChanged(agents: AgentDescriptor[]): void;
+};
+
+export function registerIpc(
+  mainWindow: BrowserWindow,
+  windows: IpcWindowController,
+) {
   const service = createDesktopService();
   const terminalSubscriptions = new Map<string, Cleanup>();
 
   function assertSender(event: IpcMainInvokeEvent) {
-    if (event.sender !== mainWindow.webContents) {
+    if (!windows.isTrustedSender(event)) {
       throw new Error("IPC request came from an untrusted renderer.");
     }
   }
@@ -37,6 +47,7 @@ export function registerIpc(mainWindow: BrowserWindow) {
     });
   }
 
+  handle("settings:open", () => windows.openSettingsWindow());
   handle("telemetry:get-settings", () => getTelemetrySettings());
   handle("telemetry:set-mode", (_event, mode: TelemetryMode) =>
     setTelemetryMode(mode),
@@ -116,16 +127,26 @@ export function registerIpc(mainWindow: BrowserWindow) {
   );
 
   handle("agents:registry", () => service.agents.registry());
-  handle("agents:install", (_event, registryId: string) =>
-    service.agents.install(registryId),
-  );
-  handle("agents:remove", (_event, id: string) =>
-    service.agents.remove(id),
-  );
-  handle("agents:configure-codex", (_event, command: string) =>
-    service.agents.configureCodex(command),
-  );
-  handle("agents:test", (_event, id: string) => service.agents.test(id));
+  handle("agents:install", async (_event, registryId: string) => {
+    const agents = await service.agents.install(registryId);
+    windows.broadcastAgentsChanged(agents);
+    return agents;
+  });
+  handle("agents:remove", async (_event, id: string) => {
+    const agents = await service.agents.remove(id);
+    windows.broadcastAgentsChanged(agents);
+    return agents;
+  });
+  handle("agents:configure-codex", async (_event, command: string) => {
+    const agents = await service.agents.configureCodex(command);
+    windows.broadcastAgentsChanged(agents);
+    return agents;
+  });
+  handle("agents:test", async (_event, id: string) => {
+    const result = await service.agents.test(id);
+    windows.broadcastAgentsChanged(result.agents);
+    return result;
+  });
 
   handle(
     "terminals:create",
@@ -168,6 +189,7 @@ export function registerIpc(mainWindow: BrowserWindow) {
     for (const cleanup of terminalSubscriptions.values()) cleanup();
     terminalSubscriptions.clear();
     service.shutdown();
+    ipcMain.removeHandler("settings:open");
     ipcMain.removeHandler("telemetry:get-settings");
     ipcMain.removeHandler("telemetry:set-mode");
     ipcMain.removeHandler("sessions:list");

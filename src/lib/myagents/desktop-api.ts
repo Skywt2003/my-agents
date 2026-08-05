@@ -29,6 +29,10 @@ export type AgentTestResult = {
 export type DesktopApi = {
   transport: "electron" | "browser";
   platform: NodeJS.Platform | "browser";
+  settings: {
+    open(): Promise<void>;
+    onAgentsChanged(listener: (agents: AgentDescriptor[]) => void): () => void;
+  };
   telemetry?: TelemetryApi;
   sessions: {
     list(sync?: boolean): Promise<SessionsSnapshot>;

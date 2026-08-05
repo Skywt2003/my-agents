@@ -18,8 +18,15 @@ test("preserves the core workflow through browser RPC", async ({ page }) => {
     page.evaluate(() => window.myagents.telemetry),
   ).resolves.toBeUndefined();
   await expect(page).not.toHaveURL(/token=/);
+  const settingsWindowPromise = page.waitForEvent("popup");
   await page.getByRole("button", { name: "Open settings" }).click();
-  await expect(page.getByRole("tab", { name: "Privacy" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Close" }).click();
+  const settingsWindow = await settingsWindowPromise;
+  await expect(
+    settingsWindow.getByRole("heading", { name: "Settings" }),
+  ).toBeVisible();
+  await expect(
+    settingsWindow.getByRole("tab", { name: "Privacy" }),
+  ).toHaveCount(0);
+  await settingsWindow.close();
   await exerciseCoreWorkflow(page);
 });

@@ -24,6 +24,7 @@ let requestSequence = 0;
 let subscriptionSequence = 0;
 let socket: WebSocket | null = null;
 let connection: Promise<WebSocket> | null = null;
+const agentsChannel = new BroadcastChannel("myagents:agents-changed");
 
 function nextId(prefix: string) {
   const sequence = prefix === "request"
@@ -143,6 +144,29 @@ async function request<Result>(
 const browserApi: DesktopApi = {
   transport: "browser",
   platform: "browser",
+  settings: {
+    open: async () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("view", "settings");
+      url.hash = "";
+      const settingsWindow = window.open(
+        url,
+        "myagents-settings",
+        "popup,width=760,height=720",
+      );
+      if (!settingsWindow) {
+        throw new Error("The browser blocked the settings window.");
+      }
+      settingsWindow.focus();
+    },
+    onAgentsChanged: (listener) => {
+      const handleMessage = (event: MessageEvent) => {
+        if (Array.isArray(event.data)) listener(event.data);
+      };
+      agentsChannel.addEventListener("message", handleMessage);
+      return () => agentsChannel.removeEventListener("message", handleMessage);
+    },
+  },
   sessions: {
     list: (sync = false) => request("sessions.list", [sync]),
     get: (id) => request("sessions.get", [id]),
@@ -175,10 +199,38 @@ const browserApi: DesktopApi = {
   },
   agents: {
     registry: () => request("agents.registry"),
-    install: (registryId) => request("agents.install", [registryId]),
-    remove: (id) => request("agents.remove", [id]),
-    configureCodex: (command) => request("agents.configureCodex", [command]),
-    test: (id) => request("agents.test", [id]),
+    install: async (registryId) => {
+      const agents = await request<Awaited<ReturnType<DesktopApi["agents"]["install"]>>>(
+        "agents.install",
+        [registryId],
+      );
+      agentsChannel.postMessage(agents);
+      return agents;
+    },
+    remove: async (id) => {
+      const agents = await request<Awaited<ReturnType<DesktopApi["agents"]["remove"]>>>(
+        "agents.remove",
+        [id],
+      );
+      agentsChannel.postMessage(agents);
+      return agents;
+    },
+    configureCodex: async (command) => {
+      const agents = await request<Awaited<ReturnType<DesktopApi["agents"]["configureCodex"]>>>(
+        "agents.configureCodex",
+        [command],
+      );
+      agentsChannel.postMessage(agents);
+      return agents;
+    },
+    test: async (id) => {
+      const result = await request<Awaited<ReturnType<DesktopApi["agents"]["test"]>>>(
+        "agents.test",
+        [id],
+      );
+      agentsChannel.postMessage(result.agents);
+      return result;
+    },
   },
   terminals: {
     create: (cwd, cols, rows) =>

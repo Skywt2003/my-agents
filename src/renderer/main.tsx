@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "@fontsource-variable/source-serif-4";
 import "@fontsource-variable/noto-serif-sc";
 
-import { MyAgentsApp } from "@/components/myagents-app";
+import { MyAgentsApp, SettingsApp } from "@/components/myagents-app";
 import { RemoveButtonTooltips } from "@/components/remove-button-tooltips";
 import {
   initializeAppearance,
@@ -16,12 +16,19 @@ import {
 
 import "./globals.css";
 
-document.documentElement.dataset.platform = window.myagents.platform;
-initializeAppearance();
-
 async function bootstrap() {
+  if (__MYAGENTS_BROWSER_DEBUG__) {
+    const { installBrowserApi } = await import("@/renderer/browser-api");
+    installBrowserApi();
+  }
+  document.documentElement.dataset.platform = window.myagents.platform;
+  initializeAppearance();
+
   const root = document.getElementById("root");
   if (!root) throw new Error("Renderer root element is missing.");
+  const settingsView = new URLSearchParams(window.location.search).get("view") ===
+    "settings";
+  if (settingsView) document.title = "Settings";
 
   let telemetry: RendererTelemetry = {};
   try {
@@ -34,7 +41,7 @@ async function bootstrap() {
     <StrictMode>
       <ThemeProvider defaultTheme="light">
         <RemoveButtonTooltips />
-        <MyAgentsApp />
+        {settingsView ? <SettingsApp /> : <MyAgentsApp />}
       </ThemeProvider>
     </StrictMode>,
   );

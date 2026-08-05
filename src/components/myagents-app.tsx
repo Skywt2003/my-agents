@@ -498,6 +498,18 @@ export function MyAgentsApp() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => window.myagents.settings.onAgentsChanged((nextAgents) => {
+    setAgents(nextAgents);
+    setAgentId((current) => {
+      if (nextAgents.some(({ id }) => id === current)) return current;
+      const nextAgent = nextAgents.find(
+        ({ available, enabled }) => available && enabled,
+      ) ?? nextAgents[0] ?? null;
+      setCachedModel(readCachedModelOption(projectId, nextAgent));
+      return nextAgent?.id ?? "codex";
+    });
+  }), [projectId]);
+
   useEffect(() => {
     if (!selectedId) return;
     void refreshSession(selectedId, true, true);
@@ -695,19 +707,6 @@ export function MyAgentsApp() {
       setProjectError(getError(error));
     } finally {
       setSelectingProjectDirectory(false);
-    }
-  }
-
-  function replaceAgents(nextAgents: AgentDescriptor[]) {
-    setAgents(nextAgents);
-    if (!nextAgents.some(({ id }) => id === agentId)) {
-      discardDraftSession();
-      const nextAgent = nextAgents.find(
-        ({ available, enabled }) => available && enabled,
-      ) ?? nextAgents[0] ?? null;
-      const nextAgentId = nextAgent?.id ?? "codex";
-      setAgentId(nextAgentId);
-      setCachedModel(readCachedModelOption(projectId, nextAgent));
     }
   }
 
@@ -928,7 +927,7 @@ export function MyAgentsApp() {
             ))}</div>}</section>; })}</div>}
           </div>
             </ScrollArea>
-            <div className="h-10 border-t px-3"><div className="flex h-full items-center gap-2 rounded-md px-1"><Avatar size="sm" className="rounded-md"><AvatarFallback className="rounded-md bg-muted"><Bot className="size-3.5" /></AvatarFallback></Avatar><p className="min-w-0 flex-1 truncate text-[11px] font-medium">{agents.filter(({ enabled }) => enabled).length} Agents</p><AgentSettingsDialog agents={agents} onAgentsChanged={replaceAgents} /></div></div>
+            <div className="h-10 border-t px-3"><div className="flex h-full items-center gap-2 rounded-md px-1"><Avatar size="sm" className="rounded-md"><AvatarFallback className="rounded-md bg-muted"><Bot className="size-3.5" /></AvatarFallback></Avatar><p className="min-w-0 flex-1 truncate text-[11px] font-medium">{agents.filter(({ enabled }) => enabled).length} Agents</p><Button type="button" variant="ghost" size="icon-sm" aria-label="Open settings" onClick={() => void window.myagents.settings.open().catch((error) => setPageError(getError(error)))}><Settings /></Button></div></div>
             <ResizeHandle
           orientation="vertical"
           value={sidebarWidth}
@@ -1179,14 +1178,9 @@ function SessionDetailsDialog({
   );
 }
 
-function AgentSettingsDialog({
-  agents,
-  onAgentsChanged,
-}: {
-  agents: AgentDescriptor[];
-  onAgentsChanged: (agents: AgentDescriptor[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
+export function SettingsApp() {
+  const [agents, setAgents] = useState<AgentDescriptor[]>([]);
+  const [loadingAgents, setLoadingAgents] = useState(true);
   const [registry, setRegistry] = useState<RegistryAgentView[]>([]);
   const [registryQuery, setRegistryQuery] = useState("");
   const [registryPage, setRegistryPage] = useState(0);
@@ -1206,25 +1200,33 @@ function AgentSettingsDialog({
   );
   const registrySectionRef = useRef<HTMLElement>(null);
 
-  function loadRegistry() {
-    if (registry.length > 0 || registryLoading) return;
+  useEffect(() => {
+    let cancelled = false;
     setRegistryLoading(true);
     setRegistryError(null);
-    void window.myagents.agents.registry()
-      .then(setRegistry)
-      .catch((error) => setRegistryError(getError(error)))
-      .finally(() => setRegistryLoading(false));
-  }
-
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen);
-    if (nextOpen) {
+    void Promise.all([
+      window.myagents.sessions.list(),
+      window.myagents.agents.registry(),
+    ]).then(([snapshot, registryAgents]) => {
+      if (cancelled) return;
+      setAgents(snapshot.agents);
       setCodexCommand(
-        agents.find(({ id }) => id === "codex")?.displayCommand ?? "codex",
+        snapshot.agents.find(({ id }) => id === "codex")?.displayCommand ??
+          "codex",
       );
-      loadRegistry();
-    }
-  }
+      setRegistry(registryAgents);
+    }).catch((error) => {
+      if (!cancelled) setRegistryError(getError(error));
+    }).finally(() => {
+      if (!cancelled) {
+        setLoadingAgents(false);
+        setRegistryLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const filteredRegistry = useMemo(() => {
     const query = registryQuery.trim().toLowerCase();
@@ -1261,7 +1263,7 @@ function AgentSettingsDialog({
     setRegistryError(null);
     try {
       const nextAgents = await window.myagents.agents.install(registryId);
-      onAgentsChanged(nextAgents);
+      setAgents(nextAgents);
       setRegistry((current) =>
         current.map((agent) =>
           agent.id === registryId ? { ...agent, installed: true } : agent,
@@ -1279,7 +1281,7 @@ function AgentSettingsDialog({
     setRegistryError(null);
     try {
       const nextAgents = await window.myagents.agents.remove(id);
-      onAgentsChanged(nextAgents);
+      setAgents(nextAgents);
       setRegistry((current) =>
         current.map((agent) =>
           agent.id === id ? { ...agent, installed: false } : agent,
@@ -1298,7 +1300,7 @@ function AgentSettingsDialog({
     setRegistryError(null);
     try {
       const nextAgents = await window.myagents.agents.configureCodex(codexCommand);
-      onAgentsChanged(nextAgents);
+      setAgents(nextAgents);
       setCodexCommand(
         nextAgents.find(({ id }) => id === "codex")?.displayCommand ?? "codex",
       );
@@ -1323,7 +1325,7 @@ function AgentSettingsDialog({
     });
     try {
       const result = await window.myagents.agents.test(id);
-      onAgentsChanged(result.agents);
+      setAgents(result.agents);
       setTestResults((current) => ({
         ...current,
         [id]: { ok: true, message: result.message },
@@ -1339,15 +1341,12 @@ function AgentSettingsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Open settings" />}>
-        <Settings />
-      </DialogTrigger>
-      <DialogContent className="max-h-[88vh] overflow-hidden sm:max-w-[720px]">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-        </DialogHeader>
-        <Tabs.Root defaultValue="agents" className="min-w-0">
+    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <header className="shrink-0 border-b px-6 py-4">
+        <h1 className="text-lg font-semibold">Settings</h1>
+      </header>
+      <div className="min-h-0 flex-1 px-6 pt-4">
+        <Tabs.Root defaultValue="agents" className="flex h-full min-w-0 flex-col">
           <Tabs.List aria-label="Settings sections" className="flex border-b">
             <Tabs.Tab value="agents" className="-mb-px border-b-2 border-transparent px-3 pb-2.5 pt-1 text-sm font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-active:border-foreground data-active:text-foreground">
               Agents
@@ -1363,12 +1362,15 @@ function AgentSettingsDialog({
           </Tabs.List>
 
           <Tabs.Panel value="agents" className="outline-none">
-            <ScrollArea className="max-h-[64vh] min-w-0 w-full overflow-x-hidden pr-4">
+            <ScrollArea className="h-[calc(100vh-126px)] min-w-0 w-full overflow-x-hidden pr-4">
               <div className="space-y-6 py-5">
                 <section>
                   <Label>Installed</Label>
                   <div className="mt-2 space-y-2">
-                    {agents.length === 0 && (
+                    {loadingAgents && (
+                      <SidebarStatus icon={<LoaderCircle className="animate-spin" />} label="Loading installed Agents" />
+                    )}
+                    {!loadingAgents && agents.length === 0 && (
                       <p className="rounded-lg border border-dashed px-3 py-5 text-center text-xs text-muted-foreground">
                         No Agents added yet.
                       </p>
@@ -1528,8 +1530,8 @@ function AgentSettingsDialog({
             </Tabs.Panel>
           )}
         </Tabs.Root>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </main>
   );
 }
 
